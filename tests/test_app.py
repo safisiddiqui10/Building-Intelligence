@@ -38,7 +38,7 @@ def test_healthz():
 
 
 def test_query_placeholder():
-    r = client.post("/v1/query", json={"question": "What is murder?", "pattern": "semantic"})
+    r = client.post("/v1/query", json={"question": "What is murder?", "pattern": "hybrid"})
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "not_implemented"
@@ -84,3 +84,18 @@ def test_chat_errors_use_openai_envelope():
     r = client.post("/v1/chat/completions", json={**PIPE_REQUEST, "rag_options": {"surprise": 1}})
     assert r.status_code == 400
     assert "error" in r.json()
+
+
+def test_semantic_filters_contract():
+    from pydantic import ValidationError
+
+    from building_with_rag.models import SemanticFilters
+
+    ok = SemanticFilters(act=["BNS_2023"], status=["in_force"], access_level=["public"])
+    assert ok.act == ["BNS_2023"]
+    for bad in ({"owner": ["x"]}, {"$or": [{"act": "x"}]}, {"act": [{"$ne": "x"}]}):
+        try:
+            SemanticFilters(**bad)
+        except ValidationError:
+            continue
+        raise AssertionError(f"accepted {bad}")

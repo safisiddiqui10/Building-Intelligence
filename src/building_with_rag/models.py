@@ -1,16 +1,23 @@
 """Typed contracts. No behaviour. Later stories extend these additively."""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Mode = Literal["semantic", "hybrid", "hybrid-reranked", "structured", "decomposition", "hyde"]
 
 
+FilterValue = Annotated[str, Field(min_length=1, max_length=64)]
+
+
 class SemanticFilters(BaseModel):
-    act: list[str] = Field(default_factory=list)
-    status: list[str] = Field(default_factory=list)
-    access_level: list[str] = Field(default_factory=list)
+    """Caller filters only narrow the scope; unknown fields are refused."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    act: list[FilterValue] = Field(default_factory=list, max_length=10)
+    status: list[FilterValue] = Field(default_factory=list, max_length=10)
+    access_level: list[FilterValue] = Field(default_factory=list, max_length=10)
 
 
 class QueryRequest(BaseModel):
@@ -22,6 +29,13 @@ class QueryRequest(BaseModel):
     generate_answer: bool = False
     required_acts: list[str] = Field(default_factory=list)
     chapter: str | None = None
+
+    @field_validator("question")
+    @classmethod
+    def _question_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("question must contain non-whitespace text")
+        return v
 
 
 class RetrievedChunk(BaseModel):

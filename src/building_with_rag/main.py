@@ -24,7 +24,8 @@ from building_with_rag.models import (
     QueryResult,
     SemanticFilters,
 )
-from building_with_rag.registry import MODE_BY_MODEL_ID, MODEL_IDS, run_pattern
+from building_with_rag.registry import MODE_BY_MODEL_ID, MODEL_IDS, placeholder, run_pattern
+from building_with_rag.retrieval import RetrievalUnavailable
 
 app = FastAPI(title="Building with RAG")
 
@@ -42,6 +43,11 @@ class OpenAIError(Exception):
 @app.exception_handler(OpenAIError)
 async def _openai_error_handler(_: Request, exc: OpenAIError) -> JSONResponse:
     return _openai_error(exc.status, exc.message, exc.type, exc.code)
+
+
+@app.exception_handler(RetrievalUnavailable)
+async def _retrieval_unavailable_handler(_: Request, exc: RetrievalUnavailable) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": f"Retrieval unavailable: {exc}"})
 
 
 @app.exception_handler(RequestValidationError)
@@ -72,7 +78,7 @@ def healthz() -> dict[str, str]:
 @app.post("/v1/query", response_model=QueryResult)
 def query(request: QueryRequest, settings: Settings = Depends(get_settings)) -> QueryResult:
     request.caller_id = resolve_caller(request.caller_id, settings)
-    return run_pattern(request)
+    return run_pattern(request, settings)
 
 
 @app.get("/v1/models", response_model=ModelList)
@@ -136,7 +142,8 @@ def chat_completions(
             400, "Invalid request.", "invalid_request_error", "invalid_request"
         ) from exc
 
-    result = run_pattern(request)
+    # Chat stays a placeholder until answer generation; it never calls retrieval.
+    result = placeholder(request)
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
     if body.stream:

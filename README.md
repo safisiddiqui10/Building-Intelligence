@@ -29,3 +29,5 @@ Copy `.env.example` to `.env`. `.env` is untracked and secrets are never committ
 
 Extract the BNS/IPC sections into `data/processed/` (no credentials needed): `uv run python -m building_with_rag.ingestion`. Details in `docs/architecture.md`.
 Load MongoDB and build the vector index (needs `MONGODB_URI` and `VOYAGE_API_KEY`; first run about 40 minutes): `uv run python -m building_with_rag.ingestion.load_mongodb`.
+
+Semantic retrieval diagnostic (compact output): `uv run python -m building_with_rag.retrieval "What is the punishment for murder?" --limit 5` (readiness: `--check`).
