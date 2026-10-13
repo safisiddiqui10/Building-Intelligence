@@ -20,7 +20,7 @@ from pathlib import Path
 import pypdf
 from pypdf import PdfReader
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 RAW_DIR = ROOT / "data" / "raw"
 OUT_DIR = ROOT / "data" / "processed"
 PARSER = "pypdf"
