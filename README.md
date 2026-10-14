@@ -31,3 +31,5 @@ Extract the BNS/IPC sections into `data/processed/` (no credentials needed): `uv
 Load MongoDB and build the vector index (needs `MONGODB_URI` and `VOYAGE_API_KEY`; first run about 40 minutes): `uv run python -m building_with_rag.ingestion.load_mongodb`.
 
 Semantic retrieval diagnostic (compact output): `uv run python -m building_with_rag.retrieval "What is the punishment for murder?" --limit 5` (readiness: `--check`).
+
+Grounded answer diagnostic (needs the `GENERATION_*` settings; compact JSON): `uv run python -m building_with_rag.generation "What is the punishment for murder?" --limit 5`. `POST /v1/query` with `"generate_answer": true` returns the same in `generation`.

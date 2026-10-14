@@ -95,3 +95,33 @@ Expected:
 5. `200` `chat.completion` whose content is the existing "not implemented yet" placeholder.
 
 If `MONGODB_URI` or `VOYAGE_API_KEY` is missing, or Voyage rate-limits, command 1 returns `503` with `{"detail":"Retrieval unavailable: ..."}`, not `no_results`.
+
+## Story 3.1 — Grounded Answer Generation
+
+**What it adds:** `POST /v1/query` with `"generate_answer": true` on the `semantic` mode returns a grounded, cited answer in `generation`, next to the retrieved `results` (non-streaming; chat stays a placeholder).
+
+Prerequisite: API running (see Story 1.1) with the Story 2.3 setup plus `GENERATION_API_BASE_URL` and `GENERATION_API_KEY` set in `.env` (`GENERATION_MODEL_NAME` defaults to `gpt-4o-mini`). Run the commands one at a time because the free Voyage key is rate limited.
+
+```bash
+# 1. Success: grounded answer
+curl -X POST http://127.0.0.1:8000/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the punishment for murder?", "pattern": "semantic", "limit": 5, "generate_answer": true}'
+
+# 2. Edge: question the corpus cannot answer
+curl -X POST http://127.0.0.1:8000/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the penalty for jaywalking in Delhi under the Motor Vehicles Act?", "pattern": "semantic", "limit": 5, "generate_answer": true}'
+
+# 3. Default: generation is off, so the Story 2.3 shape is unchanged
+curl -X POST http://127.0.0.1:8000/v1/query \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is the punishment for murder?", "pattern": "semantic", "limit": 3}'
+```
+
+Expected:
+1. `200`, `status: "ok"`, `results` still returned, `generation.outcome: "answered"` with `provider: "openai-compatible"`, a non-empty `answer`, `claims` each citing labels (`E1`…), and `citations` resolved to act-qualified `section_id`s (for example `ipc:302`, `bns:103`) with matching `supporting_passages`. `message` is "Answer generated from N cited of 5 retrieved passages."
+2. `200`, `results` still hold the nearest passages, `generation.outcome: "insufficient_evidence"`, `answer: null`, empty `citations`; `message` is "The retrieved passages do not support an answer."
+3. `200`, `status: "ok"`, `generation: null`.
+
+If `GENERATION_API_BASE_URL` or `GENERATION_API_KEY` is empty, or the provider times out or errors, commands 1 and 2 still return `200` with `generation.outcome: "unavailable"` and `answer: null` (reason in `generation.trace`); retrieval failures remain `503`.

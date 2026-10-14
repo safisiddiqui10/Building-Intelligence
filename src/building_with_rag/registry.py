@@ -22,5 +22,11 @@ def run_pattern(request: QueryRequest, settings: Settings | None = None) -> Quer
     if request.pattern == "semantic":
         from building_with_rag.retrieval import semantic_search  # lazy: no connections at startup
 
-        return semantic_search(request, settings or get_settings())
+        settings = settings or get_settings()
+        result = semantic_search(request, settings)
+        if request.generate_answer:
+            from building_with_rag.generation import add_generation
+
+            result = add_generation(request.question, result, settings)
+        return result
     return placeholder(request)
