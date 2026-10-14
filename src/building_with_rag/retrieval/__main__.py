@@ -3,6 +3,7 @@
   uv run python -m building_with_rag.retrieval --check
   uv run python -m building_with_rag.retrieval "question" [--limit N] [--act A] [--status S]
   uv run python -m building_with_rag.retrieval "question" --inspect
+  uv run python -m building_with_rag.retrieval "question" --mode hybrid
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ from ..config import get_settings
 from ..ingestion.mongodb_schema import (
     CHUNKS,
     EMBEDDINGS,
+    KEYWORD_FIELD,
+    KEYWORD_INDEX_NAME,
     SECTIONS,
     SOURCES,
     VECTOR_FIELD,
@@ -25,7 +28,12 @@ from ..ingestion.mongodb_schema import (
 )
 from ..ingestion.parser import ACTS, OUT_DIR
 from ..models import QueryRequest, SemanticFilters
+from .hybrid import hybrid_search
 from .semantic import RetrievalUnavailable, get_db, index_status, semantic_search
+
+
+def _f(v: float | None) -> str:
+    return "-" if v is None else f"{v:.4f}"
 
 
 def check() -> int:
@@ -53,8 +61,12 @@ def check() -> int:
               f"dimensions={sample['dimensions']}")
     queryable, note = index_status(db)
     print(f"vector index: {note}")
+    kw = list(db[CHUNKS].list_search_indexes(KEYWORD_INDEX_NAME))
+    kw_ok = bool(kw) and kw[0].get("type") == "search" and bool(kw[0].get("queryable"))
+    print(f"keyword index: {KEYWORD_INDEX_NAME} type={kw[0].get('type') if kw else None} "
+          f"queryable={kw_ok} field={KEYWORD_FIELD}")
     ready = (counts[EMBEDDINGS] == counts[CHUNKS] > 0 and missing == 0 and other == 0
-             and queryable and sample is not None
+             and queryable and kw_ok and sample is not None
              and len(sample[VECTOR_FIELD]) == s.embedding_dimensions)
     print("readiness:", "ready" if ready else "NOT ready")
     return 0 if ready else 1
@@ -88,6 +100,7 @@ def main() -> int:
     ap.add_argument("--act", action="append", default=[])
     ap.add_argument("--status", action="append", default=[])
     ap.add_argument("--inspect", action="store_true")
+    ap.add_argument("--mode", choices=("semantic", "hybrid"), default="semantic")
     a = ap.parse_args()
     try:
         if a.check:
@@ -98,13 +111,28 @@ def main() -> int:
         req = QueryRequest(question=a.question, pattern="semantic", limit=a.limit,
                            caller_id=s.webui_demo_caller_id,
                            filters=SemanticFilters(act=a.act, status=a.status))
-        res = semantic_search(req, s)
+        if a.mode == "hybrid":
+            req.pattern = "hybrid"
+            res = hybrid_search(req, s)
+        else:
+            res = semantic_search(req, s)
         t = res.trace[0]
         print(f"mode={res.pattern} query={t['query']!r} status={res.status}")
-        print("trace:", {k: t[k] for k in ("limit", "num_candidates", "filters_applied", "hits",
-                                           "dropped_model_mismatch", "dropped_unresolved",
-                                           "returned")})
+        keys = ("limit", "num_candidates", "filters_applied", "hits", "dropped_model_mismatch",
+                "dropped_unresolved", "returned")
+        if a.mode == "hybrid":
+            keys = ("limit", "filters_applied", "fusion", "semantic_hits", "keyword_hits",
+                    "in_both_routes", "semantic_only", "keyword_only", "dropped_model_mismatch",
+                    "dropped_unresolved", "fused_total", "returned")
+        print("trace:", {k: t[k] for k in keys})
         for i, r in enumerate(res.results, 1):
+            if a.mode == "hybrid":
+                print(f"{i}. fused={r.fused_score:.5f} "
+                      f"semantic={r.semantic_rank}/{_f(r.semantic_score)} "
+                      f"keyword={r.keyword_rank}/{_f(r.keyword_score)} chunk_id={r.chunk_id} "
+                      f"section_id={r.section_id} heading={r.heading!r} page={r.page} "
+                      f"text_len={len(r.text)}")
+                continue
             print(f"{i}. score={r.score:.4f} chunk_id={r.chunk_id} section_id={r.section_id} "
                   f"heading={r.heading!r} source_file={r.source_file} page={r.page} "
                   f"text_len={len(r.text)}")

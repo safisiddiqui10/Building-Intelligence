@@ -39,7 +39,7 @@ One registry, one `run_pattern` dispatcher. Model IDs are `rag-<mode>`.
 | Mode | Model ID |
 |---|---|
 | `semantic` | `rag-semantic` |
-| `hybrid` | `rag-hybrid` |
+| `hybrid` | `rag-hybrid` (real since Story 4.1) |
 | `hybrid-reranked` | `rag-hybrid-reranked` |
 | `structured` | `rag-structured` |
 | `decomposition` | `rag-decomposition` |
@@ -125,7 +125,7 @@ Story 3.1 adds a non-streaming grounded answer to `POST /v1/query` for `semantic
 
 Story 3.2 connects real generation to Open WebUI. Code: `src/building_with_rag/generation/{answer,checks,events,render}.py`, `registry.start_pattern`, `main.py`.
 
-- **One path.** `start_pattern` runs the selected pattern once (one retrieval) and, when `generate_answer` is true, returns one unstarted generation event iterator. `run_pattern` (`/v1/query`) drains it; chat renders it. Never two LLM calls for one request. Only `semantic` is real; the other five modes still return the placeholder, streamed as before.
+- **One path.** `start_pattern` runs the selected pattern once (one retrieval) and, when `generate_answer` is true, returns one unstarted generation event iterator. `run_pattern` (`/v1/query`) drains it; chat renders it. Never two LLM calls for one request. `semantic` and `hybrid` (Story 4.1) are real; the other four modes still return the placeholder, streamed as before.
 - **Only answer writing streams.** Retrieval and context assembly are not streamed and run before the response starts, so a retrieval failure is an HTTP error (chat: OpenAI error envelope, 503), never a half-open stream. Generation outcomes are in the stream or in `QueryResult.generation` with HTTP 200.
 - **Answer contract.** The model writes plain text; every sentence ends with the supplied labels in brackets (`[E3]`). `INSUFFICIENT_EVIDENCE: <reason>` means no answer; it is not retried and never shown as draft text. The provider is called with the standard OpenAI body with `stream: true`.
 - **Bounded attempts.** `MAX_ATTEMPTS` = 2. After each attempt: a **citation** check (at least one sentence; each cites supplied labels only; unknown labels are recorded, never stripped) and a **support** check (lexical: numbers must appear in the cited passages and at least `SUPPORT_MIN_OVERLAP` = 0.6 of key words must overlap; it catches fabricated numbers and off-topic claims, not subtle misreadings). Each failed check is one `issues` entry (`attempt`, `check`, `detail`). A failed attempt with an attempt left is retried with the plain-language failures as feedback.
@@ -133,3 +133,16 @@ Story 3.2 connects real generation to Open WebUI. Code: `src/building_with_rag/g
 - **DRAFT labelling.** Open WebUI cannot retract shown text, so each attempt starts with `DRAFT — checking evidence`; a retry adds a `Check failed … Retrying` line; success closes with `Confidence: high`, the checks passed and a Sources list; a failed final check closes with `DRAFT — low confidence, not the final answer` and a short reason. If the provider fails after text began, the stream ends with a labelled unavailable line, then stop and `[DONE]`.
 - **Chat vs `/v1/query`.** Chat shows only that text. `/v1/query` returns the full `QueryResult`: `generation.issues`, `attempts`, `trace`, `claims`, `citations`, `supporting_passages` and the retrieved `results`.
 - **Auth.** `CAPSTONE_API_KEY` is one shared key, not user authorization; compared in constant time and never echoed.
+
+## Hybrid retrieval
+
+Story 4.1 makes `hybrid` the second real mode. It is selected explicitly (`rag-hybrid` or `pattern: "hybrid"`); nothing routes between modes automatically. Code: `src/building_with_rag/retrieval/hybrid.py`.
+
+- **Capability found.** The configured deployment is Atlas (M0) with Search index management. Keyword search is Atlas Search: a `search`-type index and `$search` with the `text` operator, created with `create_search_index(SearchIndexModel(type="search"))`. If it is unavailable (not Atlas, missing privilege, search-index cap), `load_mongodb` stops with the prerequisite, `semantic` is unchanged and `hybrid` is not usable; there is no regex, `$text` or in-memory fallback.
+- **Field and index.** `chunks.text` (the clean chunk text; not `embedding_input_text`, not the section text). Index `chunks_text_search_index` on `chunks`, static mapping: `text` as `string` with `lucene.standard`; `act`, `chapter`, `status`, `access_level` as `token` for filters. Created or verified by `uv run python -m building_with_rag.ingestion.load_mongodb --skip-embed` (reuse a match; report a mismatch, never change it). Nothing was re-embedded, re-chunked or rewritten.
+- **Flow.** Validate → readiness (vector index, embeddings and keyword index all queryable) → semantic route (existing embed + `$vectorSearch`, 20 candidates) → keyword route (one `$search`, `text` on `chunks.text`, the same server-built filter as `compound.filter`, 20 candidates) → fuse → resolve `chunk_id` to `chunks` and `sections` → `QueryResult.results`. Corpus, MongoDB, `RetrievedChunk`, context assembly, citations, confidence, `/v1/query`, chat streaming and `.env.example` are shared with semantic; no setting was added.
+- **Fusion rule.** Reciprocal rank fusion in the application: `fused_score = Σ 1 / (60 + rank)` over the routes that returned the chunk, equal weights (`RRF_K`, `ROUTE_WEIGHTS`, `HYBRID_ROUTE_CANDIDATES` in `hybrid.py`). Rank-based because cosine similarity and the keyword score are on different scales. Ties: better single-route rank, then `chunk_id`. `$rankFusion` is not used, so the rule is visible and identical on every tier.
+- **Result.** `RetrievedChunk` gains `semantic_score`, `semantic_rank`, `keyword_score`, `keyword_rank`, `fused_score`, `fused_rank` (null in semantic results); in hybrid `score` equals `fused_score`. `trace[0]` records the fusion rule, per-route hit counts, overlap, semantic-only and keyword-only counts, drops, and one `candidates` row per fused candidate (routes, ranks, scores, `returned`), including those cut by `limit`. No passage text or vectors.
+- **Failures.** A missing or not-queryable vector or keyword index, a failed `$search`, or an embedding failure is HTTP 503, never `no_results` and never a silent semantic-only result.
+- **Limitations.** The keyword route sees only `chunks.text`, so section numbers and headings are not keyword-searchable (a section's own number is usually absent from its body; cross-references are present). A natural-language question is matched term by term with no stop-word, phrase or synonym handling, so common words add noise. RRF discards score magnitude. The fused score is not confidence or correctness. `k` and pool size were chosen, not tuned. Hybrid costs one extra search call. No re-ranking.
+- **Diagnostic command:** `uv run python -m building_with_rag.retrieval "<question>" --mode hybrid` (`--check` also reports the keyword index).

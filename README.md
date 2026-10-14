@@ -34,3 +34,5 @@ Load MongoDB and build the vector index (needs `MONGODB_URI` and `VOYAGE_API_KEY
 Semantic retrieval diagnostic (compact output): `uv run python -m building_with_rag.retrieval "What is the punishment for murder?" --limit 5` (readiness: `--check`).
 
 Grounded answer diagnostic (needs the `GENERATION_*` settings; compact JSON): `uv run python -m building_with_rag.generation "What is the punishment for murder?" --limit 5`. `POST /v1/query` with `"generate_answer": true` returns the same in `generation`.
+
+Hybrid retrieval diagnostic (semantic + keyword, fused by reciprocal rank; needs the keyword index from `load_mongodb --skip-embed`): `uv run python -m building_with_rag.retrieval "culpable homicide not amounting to murder" --mode hybrid`.

@@ -1,4 +1,4 @@
-"""Single mode registry and dispatcher. Only `semantic` is implemented so far."""
+"""Single mode registry and dispatcher. `semantic` and `hybrid` are implemented so far."""
 
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -31,11 +31,13 @@ class PatternRun:
 def start_pattern(request: QueryRequest, settings: Settings | None = None) -> PatternRun:
     """Run the selected pattern once. Generation, if requested, is returned unstarted so the
     caller either drains it (`run_pattern`) or streams it (chat): one retrieval, one operation."""
-    if request.pattern == "semantic":
-        from building_with_rag.retrieval import semantic_search  # lazy: no connections at startup
+    if request.pattern in ("semantic", "hybrid"):
+        from building_with_rag import retrieval  # lazy: no connections at startup
 
         settings = settings or get_settings()
-        result = semantic_search(request, settings)
+        search = retrieval.semantic_search if request.pattern == "semantic" \
+            else retrieval.hybrid_search
+        result = search(request, settings)
         if request.generate_answer:
             from building_with_rag.generation import generate_events
 

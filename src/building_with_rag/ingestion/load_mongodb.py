@@ -23,6 +23,7 @@ from .mongodb_schema import (
     CHUNKING_VERSION,
     CHUNKS,
     EMBEDDINGS,
+    KEYWORD_INDEX_NAME,
     SECTIONS,
     SOURCES,
     SPLITTER,
@@ -33,6 +34,8 @@ from .mongodb_schema import (
     embedding_input,
     ensure_collections,
     ensure_indexes,
+    keyword_index_definition,
+    keyword_index_model,
     source_id,
     text_sha256,
     vector_index_definition,
@@ -171,6 +174,42 @@ def ensure_vector_index(db, dims: int) -> None:
     print(f"Vector index {VECTOR_INDEX_NAME}: reused (definition matches).")
 
 
+def ensure_keyword_index(db) -> None:
+    """Atlas Search index on chunks.text for the hybrid keyword route. Never changes a mismatch."""
+    coll = db[CHUNKS]
+    existing = list(coll.list_search_indexes(KEYWORD_INDEX_NAME))
+    if not existing:
+        total = len(list(coll.list_search_indexes()))
+        try:
+            coll.create_search_index(keyword_index_model())
+        except OperationFailure as exc:
+            raise Stop("Prerequisite: Atlas Search keyword index could not be created "
+                       f"(code {exc.code}); {total} search indexes exist on chunks. Check the "
+                       "M0 search-index limit and your privileges. Semantic mode is unaffected; "
+                       "hybrid needs this index.") from None
+        print(f"Keyword index {KEYWORD_INDEX_NAME}: created.")
+        return
+    want = keyword_index_definition()
+    have = existing[0].get("latestDefinition") or existing[0].get("definition")
+    if existing[0].get("type") != "search" or have != want:
+        raise Stop(f"Index {KEYWORD_INDEX_NAME} exists with a different configuration; not "
+                   f"touching it.\n  wanted: {want}\n  found:  {have} "
+                   f"(type {existing[0].get('type')})")
+    print(f"Keyword index {KEYWORD_INDEX_NAME}: reused (definition matches).")
+
+
+def wait_for_keyword_index(db) -> bool:
+    deadline = time.time() + INDEX_WAIT_SECONDS
+    while time.time() < deadline:
+        found = list(db[CHUNKS].list_search_indexes(KEYWORD_INDEX_NAME))
+        if found and found[0].get("queryable"):
+            print(f"Keyword index {KEYWORD_INDEX_NAME}: queryable.")
+            return True
+        time.sleep(INDEX_POLL_SECONDS)
+    print("Keyword index not ready yet; re-run to continue.")
+    return False
+
+
 def wait_for_index(db) -> bool:
     deadline = time.time() + INDEX_WAIT_SECONDS
     while time.time() < deadline:
@@ -251,6 +290,8 @@ def run(use_test_db: bool, skip_embed: bool) -> None:
     ensure_indexes(db)
     load_sections_and_chunks(db, read_sections())
     ensure_vector_index(db, s.embedding_dimensions)
+    ensure_keyword_index(db)
+    wait_for_keyword_index(db)
     if skip_embed or not s.voyage_api_key:
         reason = "--skip-embed" if skip_embed else "VOYAGE_API_KEY is empty"
         print(f"Embedding skipped ({reason}); verification pending.")

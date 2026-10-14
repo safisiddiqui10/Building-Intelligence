@@ -138,3 +138,26 @@ When done, add a **Completion record** to the end of this file with:
 - Known limitations: fused score is not confidence; keyword route covers `chunks.text` only; no stop-word, phrase or synonym handling; RRF constants were chosen not tuned; explicit selection only; no re-ranking, evaluation, routing or agentic behaviour; one demo caller, `public` only.
 
 **For the next story (re-ranking, `hybrid-reranked`):** call the same hybrid retrieval and take its fused `results` as the candidate list; add `rerank_score` and `rerank_rank` to `RetrievedChunk` additively, use the existing `RERANK_*` settings, and keep context assembly, citations, `/v1/query`, chat and the streaming path unchanged.
+
+## Completion record
+
+**Capability found:** Atlas with Search index management (`list_search_indexes` works; the vector index was reused). Keyword search is Atlas Search (`search`-type index, `$search` `text`). Index created: `chunks_text_search_index` on `chunks`, field `text` (`lucene.standard`), `act`/`chapter`/`status`/`access_level` as `token`. `load_mongodb --skip-embed` reported "created", then "queryable". I did not separately print the total search-index count, because creation succeeded.
+
+**Files created:** `retrieval/hybrid.py`, `tests/test_hybrid.py`. **Changed:** `models.py` (six `RetrievedChunk` fields), `ingestion/{mongodb_schema,load_mongodb}.py` (keyword index constants, definition, safe-repeat step), `retrieval/{__init__,semantic,__main__}.py` (shared helpers `vector_search`, `load_evidence`, `to_retrieved` extracted from `semantic_search`; `--mode`; `--check` reports the keyword index), `registry.py` (`hybrid` dispatch through the same `start_pattern`), `tests/{test_app,test_chat_streaming}.py`, `docs/architecture.md`, `docs/manual-tests.md`, `README.md`. `generation/`, `main.py`, `.env.example`, the Pipe and the Filter are unchanged.
+
+**Fusion as implemented:** RRF in the application, `RRF_K` = 60, equal weights, `HYBRID_ROUTE_CANDIDATES` = 20 per route, ties by better single-route rank then `chunk_id`; `fused_rank` is assigned after unresolved candidates are dropped.
+
+**Tests updated:** the tests that used `hybrid` as the placeholder example now use `hybrid-reranked`, because `hybrid` is real. Added 5 offline tests in `tests/test_hybrid.py`.
+
+**Commands and results:** `uv run ruff check .`: passed. `uv run pytest -q`: 36 passed. `load_mongodb --skip-embed`: keyword index created and queryable, counts unchanged (sources 2, sections 891, chunks 977). `retrieval --check`: embeddings 977, 0 without a current embedding, vector index queryable, keyword index `search` type, queryable, field `text`, readiness ready. Semantic murder question, limit 5: ipc:302, ipc:303, bns:103, bns:104, ipc:396, the same as Story 2.3 (scores 0.836 to 0.799). Failure: `VOYAGE_API_KEY` empty gives "VOYAGE_API_KEY is not set." (not `no_results`). Filter `BNS_2023` + `repealed` in hybrid gives `no_results`.
+
+**Small comparison (limit 5, one run each, answers via `run_pattern` with `generate_answer`):**
+- *Paraphrase, "What happens to someone who kills another person on purpose?"* Semantic returned ipc:307, ipc:302, bns:109, ipc:300, bns:101. Hybrid returned bns:101 (both routes: semantic rank 15, keyword rank 6), bns:100 (keyword only), ipc:307 (semantic only), ipc:299 (keyword only), ipc:302 (semantic only). Hybrid brought in the "culpable homicide" sections via shared words such as "another person", and bns:101 rose because both routes found it. Answers: semantic answered, high, attempt 1, cited ipc:302. Hybrid answered, high, attempt 1, cited bns:101 and ipc:302.
+- *Exact term, "culpable homicide not amounting to murder"* (the phrase appears in 9 BNS and 9 IPC records). Semantic returned ipc:300, ipc:308, bns:110, ipc:304, ipc:300 (chunk 1). Hybrid returned the same five chunks in a slightly different order, and four of the five were found by both routes. Answers: semantic answered, high, attempt 2 (one failed check on attempt 1), cited ipc:300, ipc:304, ipc:308, bns:110. Hybrid answered, high, attempt 1, cited the same sections.
+- *Observed:* on the paraphrase the passage sets differed and hybrid added keyword-only passages; on the exact-term question the two modes agreed on the evidence. Each answer was validated by the checks, which does not mean the legal reading is right. This is two questions and says nothing general about which mode is better. I read only sections and ranks, not the legal correctness of the answers.
+
+**Pending participant:** Open WebUI chat for `rag-hybrid` and `semantic` (check 6; the steps are in `docs/manual-tests.md`). The chat path is covered offline only. I started no server and made no HTTP call to the app.
+
+**Unfinished:** none in code.
+
+**Known limitations:** fused score is not confidence; the keyword route covers `chunks.text` only (section numbers and headings are not searchable); no stop-word, phrase or synonym handling; RRF constants were chosen, not tuned; explicit selection only; no re-ranking, evaluation, routing or agentic behaviour; one demo caller, `public` only.

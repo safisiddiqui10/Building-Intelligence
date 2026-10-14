@@ -52,6 +52,13 @@ class RetrievedChunk(BaseModel):
     chapter: str | None = None
     status: str | None = None
     access_level: str | None = None
+    # Hybrid only (Story 4.1); null in semantic results. `score` is the fused score there.
+    semantic_score: float | None = None
+    semantic_rank: int | None = None
+    keyword_score: float | None = None
+    keyword_rank: int | None = None
+    fused_score: float | None = None
+    fused_rank: int | None = None
 
 
 class OmittedCandidate(BaseModel):

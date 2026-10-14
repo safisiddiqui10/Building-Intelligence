@@ -22,6 +22,11 @@ VECTOR_FIELD = "vector"
 FILTER_FIELDS = ("act", "chapter", "status", "access_level")
 ACCESS_LEVEL = "public"
 
+# Keyword route (Story 4.1): Atlas Search index on `chunks.text`.
+KEYWORD_INDEX_NAME = "chunks_text_search_index"
+KEYWORD_FIELD = "text"
+KEYWORD_ANALYZER = "lucene.standard"
+
 CHUNK_SIZE = 2048
 CHUNK_OVERLAP = 256
 CHUNKING_VERSION = f"char-{CHUNK_SIZE}-{CHUNK_OVERLAP}-v1"
@@ -123,3 +128,21 @@ def vector_index_definition(dimensions: int) -> dict:
 def vector_index_model(dimensions: int) -> SearchIndexModel:
     return SearchIndexModel(definition=vector_index_definition(dimensions),
                             name=VECTOR_INDEX_NAME, type="vectorSearch")
+
+
+def keyword_index_definition() -> dict:
+    """Atlas Search (`search` type) index on the stored chunk text, with the filter fields."""
+    return {
+        "mappings": {
+            "dynamic": False,
+            "fields": {
+                KEYWORD_FIELD: {"type": "string", "analyzer": KEYWORD_ANALYZER},
+                **{f: {"type": "token"} for f in FILTER_FIELDS},
+            },
+        }
+    }
+
+
+def keyword_index_model() -> SearchIndexModel:
+    return SearchIndexModel(definition=keyword_index_definition(), name=KEYWORD_INDEX_NAME,
+                            type="search")

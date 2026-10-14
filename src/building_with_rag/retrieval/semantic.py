@@ -127,23 +127,10 @@ def semantic_search(request: QueryRequest, settings: Settings) -> QueryResult:
 
     vector = embed_query(request.question, settings)
     try:
-        hits = list(db[EMBEDDINGS].aggregate([
-            {"$vectorSearch": {"index": VECTOR_INDEX_NAME, "path": VECTOR_FIELD,
-                               "queryVector": vector, "numCandidates": trace["num_candidates"],
-                               "limit": request.limit, "filter": clauses}},
-            {"$project": {"chunk_id": 1, "embedding_model": 1, "embedding_model_version": 1,
-                          "dimensions": 1, "score": {"$meta": "vectorSearchScore"}}},
-        ]))
-        trace["hits"] = len(hits)
-        good = [h for h in hits
-                if h.get("embedding_model") == settings.embedding_model
-                and h.get("embedding_model_version") == settings.embedding_model_version
-                and h.get("dimensions") == settings.embedding_dimensions]
-        trace["dropped_model_mismatch"] = len(hits) - len(good)
-        chunks = {c["_id"]: c for c in db[CHUNKS].find(
-            {"_id": {"$in": [h["chunk_id"] for h in good]}})}
-        sections = {s["_id"]: s for s in db[SECTIONS].find(
-            {"_id": {"$in": list({c["section_id"] for c in chunks.values()})}})}
+        good, trace["hits"] = vector_search(db, settings, vector, clauses, request.limit,
+                                            trace["num_candidates"])
+        trace["dropped_model_mismatch"] = trace["hits"] - len(good)
+        chunks, sections = load_evidence(db, [h["chunk_id"] for h in good])
     except PyMongoError as exc:
         raise RetrievalUnavailable(f"MongoDB search failed ({type(exc).__name__}).") from None
 
@@ -154,13 +141,42 @@ def semantic_search(request: QueryRequest, settings: Settings) -> QueryResult:
         if not chunk or not section:
             trace["dropped_unresolved"] += 1
             continue
-        results.append(RetrievedChunk(
-            chunk_id=chunk["chunk_id"], section_id=section["section_id"], act=chunk["act"],
-            text=chunk["text"], heading=section.get("heading"), score=h["score"],
-            source=section.get("act_label"), source_file=section.get("source_pdf"),
-            page=section.get("page_start"), chapter=chunk.get("chapter"),
-            status=chunk.get("status"), access_level=chunk.get("access_level")))
+        results.append(to_retrieved(chunk, section, h["score"]))
     return _result(results[:request.limit], trace)
+
+
+def vector_search(db, settings: Settings, vector: list[float], clauses: dict, limit: int,
+                  n_candidates: int) -> tuple[list[dict], int]:
+    """One $vectorSearch. Returns (hits from the fixed embedding model, total hits)."""
+    hits = list(db[EMBEDDINGS].aggregate([
+        {"$vectorSearch": {"index": VECTOR_INDEX_NAME, "path": VECTOR_FIELD,
+                           "queryVector": vector, "numCandidates": n_candidates,
+                           "limit": limit, "filter": clauses}},
+        {"$project": {"chunk_id": 1, "embedding_model": 1, "embedding_model_version": 1,
+                      "dimensions": 1, "score": {"$meta": "vectorSearchScore"}}},
+    ]))
+    good = [h for h in hits
+            if h.get("embedding_model") == settings.embedding_model
+            and h.get("embedding_model_version") == settings.embedding_model_version
+            and h.get("dimensions") == settings.embedding_dimensions]
+    return good, len(hits)
+
+
+def load_evidence(db, chunk_ids: list[str]) -> tuple[dict, dict]:
+    """Batch-resolve chunk ids to `chunks` and their parent `sections`."""
+    chunks = {c["_id"]: c for c in db[CHUNKS].find({"_id": {"$in": chunk_ids}})}
+    sections = {s["_id"]: s for s in db[SECTIONS].find(
+        {"_id": {"$in": list({c["section_id"] for c in chunks.values()})}})}
+    return chunks, sections
+
+
+def to_retrieved(chunk: dict, section: dict, score: float | None, **extra) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=chunk["chunk_id"], section_id=section["section_id"], act=chunk["act"],
+        text=chunk["text"], heading=section.get("heading"), score=score,
+        source=section.get("act_label"), source_file=section.get("source_pdf"),
+        page=section.get("page_start"), chapter=chunk.get("chapter"),
+        status=chunk.get("status"), access_level=chunk.get("access_level"), **extra)
 
 
 def _result(results: list[RetrievedChunk], trace: dict) -> QueryResult:
