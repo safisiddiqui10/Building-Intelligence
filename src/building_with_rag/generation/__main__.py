@@ -40,6 +40,8 @@ def main() -> int:
         "context": [{"label": lb, "chunk_id": p.chunk_id, "section_id": p.section_id,
                      "page": p.page, "text_len": len(p.text), "excerpt": p.text[:160]}
                     for lb, p in ctx.passages.items()],
+        "confidence": gen.confidence, "draft_answer": gen.draft_answer, "issues": gen.issues,
+        "low_confidence_reason": gen.low_confidence_reason,
         "trace": gen.trace, "attempts": gen.attempts, "model": gen.model,
     }
     print(json.dumps(out, indent=2, ensure_ascii=False))

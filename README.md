@@ -25,7 +25,8 @@ Copy `.env.example` to `.env`. `.env` is untracked and secrets are never committ
    (macOS/Linux: `sh setup_open_webui.sh`). Day-to-day use `manage_open_webui`.
 2. Start this API, open `http://127.0.0.1:8080`, select **Building with RAG**, choose **semantic**
    in the RAG-options chip and send a question.
-3. The reply must be the honest "not implemented" placeholder, not a local preview.
+3. With `semantic`, the reply is a real streamed answer: a `DRAFT — checking evidence` start, then a closing `Confidence` block with sources (or a labelled low-confidence/unavailable line). Other modes still reply "not implemented".
+4. If `CAPSTONE_API_KEY` is set, `/v1/query` and chat require `Authorization: Bearer <key>`; set the same key in the Pipe's `capstone_api_key` valve. Empty means no auth (local development only).
 
 Extract the BNS/IPC sections into `data/processed/` (no credentials needed): `uv run python -m building_with_rag.ingestion`. Details in `docs/architecture.md`.
 Load MongoDB and build the vector index (needs `MONGODB_URI` and `VOYAGE_API_KEY`; first run about 40 minutes): `uv run python -m building_with_rag.ingestion.load_mongodb`.

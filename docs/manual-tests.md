@@ -125,3 +125,17 @@ Expected:
 3. `200`, `status: "ok"`, `generation: null`.
 
 If `GENERATION_API_BASE_URL` or `GENERATION_API_KEY` is empty, or the provider times out or errors, commands 1 and 2 still return `200` with `generation.outcome: "unavailable"` and `answer: null` (reason in `generation.trace`); retrieval failures remain `503`.
+
+## Story 3.2 — Streamed Answer, Confidence and Open WebUI
+
+**What it adds:** chat for `rag-semantic` runs the same retrieval and generation as `/v1/query` and streams the answer with DRAFT labels, a confidence block and sources. Run these **in Open WebUI** (`http://127.0.0.1:8080`, model **Building with RAG**, `semantic`), one question at a time (the free Voyage key is rate limited). Not Postman or curl.
+
+| # | Check | Expected |
+|---|---|---|
+| 1 | "What is the punishment for murder?" | Streams from `DRAFT — checking evidence`; closes with `Confidence: high`, `Checks passed`, Sources incl. `bns:103`. Equivalent: `answered`, `high`, attempts 1–2, citations ≥ 1. |
+| 2 | "What is the penalty for jaywalking in Delhi under the Motor Vehicles Act?" | One plain "retrieved passages do not support an answer" line; no draft prefix, no confidence. Equivalent: `insufficient_evidence`, citations 0, results 5. |
+| 3 | Force a failure (temporary bad `GENERATION_MODEL_NAME` in the shell, restart, ask check 1) | Labelled `⚠ Answer generation unavailable` line (or `DRAFT — low confidence, not the final answer`); the chat ends. Equivalent: `unavailable`, or `malformed` + `low` + `draft_answer` + citations 0. |
+| 4 | Watch check 1 | Text appears incrementally; clean finish; no raw JSON or error toast. |
+| 5 | Auth (when `CAPSTONE_API_KEY` is set) | Matching Pipe valve works; wrong/missing shows `Capstone API error (HTTP 401)`. |
+| 6 | Choose `hybrid` | The "not implemented" placeholder. |
+

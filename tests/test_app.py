@@ -1,10 +1,24 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
+from building_with_rag.config import Settings, get_settings
 from building_with_rag.main import app
 
 client = TestClient(app)
+
+
+def make_settings(**kw) -> Settings:
+    base = {"generation_api_base_url": "http://llm.test/v1", "generation_api_key": "gen-secret"}
+    return Settings(_env_file=None, **{**base, **kw})
+
+
+@pytest.fixture(autouse=True)
+def _settings():
+    app.dependency_overrides[get_settings] = lambda: make_settings()
+    yield
+    app.dependency_overrides.clear()
 
 MODELS = [
     "rag-semantic",
@@ -57,8 +71,11 @@ def test_models():
     assert [m["id"] for m in r.json()["data"]] == MODELS
 
 
+PLACEHOLDER_REQUEST = {**PIPE_REQUEST, "model": "rag-hybrid"}
+
+
 def test_chat_non_stream():
-    r = client.post("/v1/chat/completions", json={**PIPE_REQUEST, "stream": False})
+    r = client.post("/v1/chat/completions", json={**PLACEHOLDER_REQUEST, "stream": False})
     assert r.status_code == 200
     body = r.json()
     assert body["object"] == "chat.completion"
@@ -66,7 +83,7 @@ def test_chat_non_stream():
 
 
 def test_chat_stream():
-    r = client.post("/v1/chat/completions", json=PIPE_REQUEST)
+    r = client.post("/v1/chat/completions", json=PLACEHOLDER_REQUEST)
     assert r.status_code == 200
     frames = [f for f in r.text.split("\n\n") if f]
     assert frames[-1] == "data: [DONE]"
