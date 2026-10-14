@@ -119,7 +119,7 @@ def test_low_confidence_and_provider_failure_still_close(searches, monkeypatch):
 def test_placeholder_modes_do_no_retrieval_or_generation(searches, monkeypatch):
     monkeypatch.setattr(answer_module, "DEFAULT_TRANSPORT",
                         httpx.MockTransport(lambda req: pytest.fail("provider called")))
-    r = client.post("/v1/chat/completions", json={**CHAT, "model": "rag-hybrid-reranked"})
+    r = client.post("/v1/chat/completions", json={**CHAT, "model": "rag-decomposition"})
     assert "not implemented" in content_of(chunks_of(r.text)) and searches == []
 
 
@@ -135,8 +135,8 @@ def test_retrieval_failure_is_openai_error_before_stream(monkeypatch):
 
 
 def test_capstone_key_auth(monkeypatch):
-    query = {"question": "x", "pattern": "hybrid-reranked"}
-    chat = {**CHAT, "model": "rag-hybrid-reranked"}
+    query = {"question": "x", "pattern": "decomposition"}
+    chat = {**CHAT, "model": "rag-decomposition"}
     assert client.post("/v1/query", json=query).status_code == 200  # no key configured: open
     app.dependency_overrides[get_settings] = lambda: make_settings(capstone_api_key="s3cret")
     for headers in ({}, {"Authorization": "Bearer wrong"}, {"Authorization": "s3cret"}):

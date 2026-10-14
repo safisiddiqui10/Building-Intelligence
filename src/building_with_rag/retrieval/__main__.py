@@ -4,6 +4,8 @@
   uv run python -m building_with_rag.retrieval "question" [--limit N] [--act A] [--status S]
   uv run python -m building_with_rag.retrieval "question" --inspect
   uv run python -m building_with_rag.retrieval "question" --mode hybrid
+  uv run python -m building_with_rag.retrieval "question" --mode hybrid-reranked
+  uv run python -m building_with_rag.retrieval "BNS section 103" --mode structured
 """
 
 from __future__ import annotations
@@ -29,7 +31,9 @@ from ..ingestion.mongodb_schema import (
 from ..ingestion.parser import ACTS, OUT_DIR
 from ..models import QueryRequest, SemanticFilters
 from .hybrid import hybrid_search
+from .rerank import rerank_search
 from .semantic import RetrievalUnavailable, get_db, index_status, semantic_search
+from .structured import structured_search
 
 
 def _f(v: float | None) -> str:
@@ -40,6 +44,7 @@ def check() -> int:
     s = get_settings()
     print(f"MONGODB_URI: {'set' if s.mongodb_uri else 'missing'}")
     print(f"VOYAGE_API_KEY: {'set' if s.voyage_api_key else 'missing'}")
+    print(f"RERANK_API_KEY: {'set' if s.rerank_api_key else 'missing'}")
     db = get_db(s)
     counts = {n: db[n].count_documents({}) for n in (SOURCES, SECTIONS, CHUNKS, EMBEDDINGS)}
     print("counts:", " ".join(f"{k}={v}" for k, v in counts.items()))
@@ -100,7 +105,7 @@ def main() -> int:
     ap.add_argument("--act", action="append", default=[])
     ap.add_argument("--status", action="append", default=[])
     ap.add_argument("--inspect", action="store_true")
-    ap.add_argument("--mode", choices=("semantic", "hybrid"), default="semantic")
+    ap.add_argument("--mode", choices=("semantic", "hybrid", "hybrid-reranked", "structured"), default="semantic")
     a = ap.parse_args()
     try:
         if a.check:
@@ -111,7 +116,22 @@ def main() -> int:
         req = QueryRequest(question=a.question, pattern="semantic", limit=a.limit,
                            caller_id=s.webui_demo_caller_id,
                            filters=SemanticFilters(act=a.act, status=a.status))
-        if a.mode == "hybrid":
+        if a.mode == "structured":
+            req.pattern = "structured"
+            res = structured_search(req, s)
+            t = res.trace[0]
+            print(f"mode={res.pattern} status={res.status} intent={t['intent']} "
+                  f"reason={t['classifier_reason']} mongodb_called={t['mongodb_called']}")
+            print(f"signals={t['signals']} predicate={t['predicate']} matched={t['matched']}")
+            print(f"message: {res.message}")
+            for r in res.results:
+                print(f"section_id={r.section_id} heading={r.heading!r} status={r.status} "
+                      f"source_status_version={r.source_status_version!r} text_len={len(r.text)}")
+            return 0
+        if a.mode == "hybrid-reranked":
+            req.pattern = "hybrid-reranked"
+            res = rerank_search(req, s)
+        elif a.mode == "hybrid":
             req.pattern = "hybrid"
             res = hybrid_search(req, s)
         else:
@@ -120,11 +140,23 @@ def main() -> int:
         print(f"mode={res.pattern} query={t['query']!r} status={res.status}")
         keys = ("limit", "num_candidates", "filters_applied", "hits", "dropped_model_mismatch",
                 "dropped_unresolved", "returned")
-        if a.mode == "hybrid":
+        if a.mode in ("hybrid", "hybrid-reranked"):
             keys = ("limit", "filters_applied", "fusion", "semantic_hits", "keyword_hits",
                     "in_both_routes", "semantic_only", "keyword_only", "dropped_model_mismatch",
                     "dropped_unresolved", "fused_total", "returned")
         print("trace:", {k: t[k] for k in keys})
+        if a.mode == "hybrid-reranked":
+            print("rerank:", t["rerank"])
+            for c in t["candidates"]:
+                print(f"fused={c['fused_rank']}/{c['fused_score']:.5f} "
+                      f"rerank={c['rerank_rank']}/{_f(c['rerank_score'])} "
+                      f"outcome={c['outcome']} chunk_id={c['chunk_id']} "
+                      f"section_id={c['section_id']}")
+            for r in res.results:
+                print(f"final {r.rerank_rank}: {r.section_id} heading={r.heading!r}")
+            if a.inspect and res.results:
+                inspect(get_db(s), res.results[0])
+            return 0
         for i, r in enumerate(res.results, 1):
             if a.mode == "hybrid":
                 print(f"{i}. fused={r.fused_score:.5f} "

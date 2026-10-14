@@ -7,3 +7,9 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 /open-webui-bundle
+/_bmad
+/.agents
+/.claude
+/.cline
+/.github/agents
+/_bmad-output

@@ -36,3 +36,7 @@ Semantic retrieval diagnostic (compact output): `uv run python -m building_with_
 Grounded answer diagnostic (needs the `GENERATION_*` settings; compact JSON): `uv run python -m building_with_rag.generation "What is the punishment for murder?" --limit 5`. `POST /v1/query` with `"generate_answer": true` returns the same in `generation`.
 
 Hybrid retrieval diagnostic (semantic + keyword, fused by reciprocal rank; needs the keyword index from `load_mongodb --skip-embed`): `uv run python -m building_with_rag.retrieval "culpable homicide not amounting to murder" --mode hybrid`.
+
+Structured exact lookup (no LLM, no embeddings; needs only MongoDB): `uv run python -m building_with_rag.retrieval "BNS section 103" --mode structured`.
+
+Hybrid-reranked diagnostic (hybrid candidates, one re-rank call; needs `RERANK_API_KEY`, otherwise a clear "not set" message): `uv run python -m building_with_rag.retrieval "What happens to someone who kills another person on purpose?" --mode hybrid-reranked`.

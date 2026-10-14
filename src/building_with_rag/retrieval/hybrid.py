@@ -99,7 +99,10 @@ def _routes(row: dict) -> list[str]:
     return [r for r in ("semantic", "keyword") if row[f"{r}_rank"] is not None]
 
 
-def hybrid_search(request: QueryRequest, settings: Settings) -> QueryResult:
+def hybrid_candidates(request: QueryRequest, settings: Settings,
+                      keep: int) -> tuple[list[RetrievedChunk], dict]:
+    """Both routes, fused and resolved. Returns every resolved candidate in fused order plus
+    the trace; trace rows mark the first `keep` as `returned`. Callers decide what to cut."""
     db = get_db(settings)
     check_quick(db)
     check_keyword(db)
@@ -125,7 +128,7 @@ def hybrid_search(request: QueryRequest, settings: Settings) -> QueryResult:
             ("generate_answer", request.generate_answer)) if used],
     }
     if not applied["access_level"]:
-        return _result([], trace)
+        return [], trace
 
     vector = embed_query(request.question, settings)
     try:
@@ -154,24 +157,27 @@ def hybrid_search(request: QueryRequest, settings: Settings) -> QueryResult:
     results: list[RetrievedChunk] = []
     for i, (r, chunk, section) in enumerate(resolved, 1):
         r["fused_rank"] = i
-        returned = i <= request.limit
         trace["candidates"].append({
             "chunk_id": chunk["chunk_id"], "section_id": section["section_id"],
             "routes": _routes(r), "semantic_rank": r["semantic_rank"],
             "semantic_score": r["semantic_score"], "keyword_rank": r["keyword_rank"],
             "keyword_score": r["keyword_score"], "fused_rank": i,
-            "fused_score": r["fused_score"], "returned": returned})
-        if returned:
-            results.append(to_retrieved(
-                chunk, section, r["fused_score"], semantic_score=r["semantic_score"],
-                semantic_rank=r["semantic_rank"], keyword_score=r["keyword_score"],
-                keyword_rank=r["keyword_rank"], fused_score=r["fused_score"], fused_rank=i))
+            "fused_score": r["fused_score"], "returned": i <= keep})
+        results.append(to_retrieved(
+            chunk, section, r["fused_score"], semantic_score=r["semantic_score"],
+            semantic_rank=r["semantic_rank"], keyword_score=r["keyword_score"],
+            keyword_rank=r["keyword_rank"], fused_score=r["fused_score"], fused_rank=i))
     both = sum(1 for c in trace["candidates"] if len(c["routes"]) == 2)
     trace["in_both_routes"] = both
     trace["semantic_only"] = sum(1 for c in trace["candidates"] if c["routes"] == ["semantic"])
     trace["keyword_only"] = sum(1 for c in trace["candidates"] if c["routes"] == ["keyword"])
     trace["fused_total"] = len(resolved)
-    return _result(results, trace)
+    return results, trace
+
+
+def hybrid_search(request: QueryRequest, settings: Settings) -> QueryResult:
+    candidates, trace = hybrid_candidates(request, settings, request.limit)
+    return _result(candidates[:request.limit], trace)
 
 
 def _result(results: list[RetrievedChunk], trace: dict) -> QueryResult:

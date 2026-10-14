@@ -52,7 +52,7 @@ def test_healthz():
 
 
 def test_query_placeholder():
-    r = client.post("/v1/query", json={"question": "What is murder?", "pattern": "hybrid-reranked"})
+    r = client.post("/v1/query", json={"question": "What is murder?", "pattern": "decomposition"})
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "not_implemented"
@@ -71,7 +71,7 @@ def test_models():
     assert [m["id"] for m in r.json()["data"]] == MODELS
 
 
-PLACEHOLDER_REQUEST = {**PIPE_REQUEST, "model": "rag-hybrid-reranked"}
+PLACEHOLDER_REQUEST = {**PIPE_REQUEST, "model": "rag-decomposition"}
 
 
 def test_chat_non_stream():
