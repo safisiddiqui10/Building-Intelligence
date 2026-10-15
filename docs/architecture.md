@@ -44,12 +44,13 @@ One registry, one `run_pattern` dispatcher. Model IDs are `rag-<mode>`.
 | `structured` | `rag-structured` (real since Story 5.1) |
 | `decomposition` | `rag-decomposition` (real since Story 5.2) |
 | `hyde` | `rag-hyde` (real since Story 5.2) |
+| `agentic` | `rag-agentic` (real since Story 6.1) |
 
 ## API surface
 
 - `GET /healthz`: safe liveness body only.
 - `POST /v1/query`: owns the `QueryResult` diagnostics.
-- `GET /v1/models`: the six `rag-*` IDs in OpenAI list format.
+- `GET /v1/models`: the seven `rag-*` IDs in OpenAI list format.
 - `POST /v1/chat/completions`: maps model, latest user message and `rag_options` to the same `QueryRequest` and the same `start_pattern` / `run_pattern` path as `/v1/query`. The server sets `caller_id` and `generate_answer` (true). Returns only normal answer text rendered from that same generation operation (Story 3.2). Streaming emits a role frame, content frames as the LLM's text arrives, a stop frame, then `data: [DONE]`. `/v1/query` and chat require `Authorization: Bearer <CAPSTONE_API_KEY>` when that setting is non-empty (an empty value enforces nothing: local development only); `/healthz` and `/v1/models` stay open.
 
 ## Contracts rule
@@ -60,9 +61,9 @@ Request, result, generation, OpenAI and MongoDB-schema contracts live in this pr
 
 Loaded by Pydantic settings from environment / `.env`. The app starts with no credentials and connects to nothing at startup. Variables (see `.env.example`):
 
-`APP_ENV`, `MONGODB_URI`, `MONGODB_DB_NAME`, `MONGODB_TEST_DB_NAME`, `VOYAGE_API_KEY`, `CAPSTONE_API_KEY`, `WEBUI_DEMO_CALLER_ID`, `GENERATION_API_BASE_URL`, `GENERATION_API_KEY`, `GENERATION_MODEL_NAME`, `RERANK_API_BASE_URL`, `RERANK_API_KEY`, `RERANK_MODEL_NAME`, `RERANK_REQUEST_TIMEOUT_SECONDS`, `RERANK_CANDIDATE_LIMIT`, `RERANK_SEND_LIMIT`, `RERANK_RETURN_LIMIT`.
+`APP_ENV`, `MONGODB_URI`, `MONGODB_DB_NAME`, `MONGODB_TEST_DB_NAME`, `VOYAGE_API_KEY`, `CAPSTONE_API_KEY`, `WEBUI_DEMO_CALLER_ID`, `GENERATION_API_BASE_URL`, `GENERATION_API_KEY`, `GENERATION_MODEL_NAME`, `RERANK_API_BASE_URL`, `RERANK_API_KEY`, `RERANK_MODEL_NAME`, `RERANK_REQUEST_TIMEOUT_SECONDS`, `RERANK_CANDIDATE_LIMIT`, `RERANK_SEND_LIMIT`, `RERANK_RETURN_LIMIT`, `AGENTIC_DEADLINE_SECONDS`.
 
-The `RERANK_*` settings are used by `hybrid-reranked` since Story 4.2; names and defaults are unchanged (see Re-ranking). Story 5.1 (`structured`) added no variable; it uses `MONGODB_URI` and `MONGODB_DB_NAME`. Story 5.2 (`decomposition`, `hyde`) added no variable; both use the existing `GENERATION_*` settings for one model step and the Voyage embedding settings.
+The `RERANK_*` settings are used by `hybrid-reranked` since Story 4.2; names and defaults are unchanged (see Re-ranking). Story 5.1 (`structured`) added no variable; it uses `MONGODB_URI` and `MONGODB_DB_NAME`. Story 5.2 (`decomposition`, `hyde`) added no variable; both use the existing `GENERATION_*` settings for one model step and the Voyage embedding settings. Story 6.1 (`agentic`) added only `AGENTIC_DEADLINE_SECONDS` (default 45, an application deadline, not a provider variable).
 
 ## Document ingestion
 
@@ -127,7 +128,7 @@ Story 3.1 adds a non-streaming grounded answer to `POST /v1/query` for `semantic
 
 Story 3.2 connects real generation to Open WebUI. Code: `src/building_with_rag/generation/{answer,checks,events,render}.py`, `registry.start_pattern`, `main.py`.
 
-- **One path.** `start_pattern` runs the selected pattern once (one retrieval) and, when `generate_answer` is true, returns one unstarted generation event iterator. `run_pattern` (`/v1/query`) drains it; chat renders it. Never two LLM calls for one request. `semantic`, `hybrid` (Story 4.1) and `hybrid-reranked` (Story 4.2) and `structured` (Story 5.1), `decomposition` and `hyde` (Story 5.2) are real; no mode is a placeholder any more (`registry.placeholder` remains as the fallback). `structured` and `hyde` generate only for status `ok`, `decomposition` for `ok` and `partial_answer`; other statuses stream the result message.
+- **One path.** `start_pattern` runs the selected pattern once (one retrieval) and, when `generate_answer` is true, returns one unstarted generation event iterator. `run_pattern` (`/v1/query`) drains it; chat renders it. Never two LLM calls for one request. `semantic`, `hybrid` (Story 4.1) and `hybrid-reranked` (Story 4.2) and `structured` (Story 5.1), `decomposition` and `hyde` (Story 5.2) are real; no mode is a placeholder any more (`registry.placeholder` remains as the fallback). `agentic` (Story 6.1) is a seventh real mode and generates only for status `ok`. `structured` and `hyde` generate only for status `ok`, `decomposition` for `ok` and `partial_answer`; other statuses stream the result message.
 - **Only answer writing streams.** Retrieval and context assembly are not streamed and run before the response starts, so a retrieval failure is an HTTP error (chat: OpenAI error envelope, 503), never a half-open stream. Generation outcomes are in the stream or in `QueryResult.generation` with HTTP 200.
 - **Answer contract.** The model writes plain text; every sentence ends with the supplied labels in brackets (`[E3]`). `INSUFFICIENT_EVIDENCE: <reason>` means no answer; it is not retried and never shown as draft text. The provider is called with the standard OpenAI body with `stream: true`.
 - **Bounded attempts.** `MAX_ATTEMPTS` = 2. After each attempt: a **citation** check (at least one sentence; each cites supplied labels only; unknown labels are recorded, never stripped) and a **support** check (lexical: numbers must appear in the cited passages and at least `SUPPORT_MIN_OVERLAP` = 0.6 of key words must overlap; it catches fabricated numbers and off-topic claims, not subtle misreadings). Each failed check is one `issues` entry (`attempt`, `check`, `detail`). A failed attempt with an attempt left is retried with the plain-language failures as feedback.
@@ -193,3 +194,18 @@ Story 5.2 makes `hyde` the sixth real mode, for questions phrased in words the s
 - **Statuses.** `ok`, `no_results`, `hyde_unavailable` (empty or malformed text: HTTP 200, no search, no answer, the message points to `rag-semantic`). Missing configuration, a provider failure, an embedding or MongoDB error is HTTP 503.
 - **Limitations.** Bounded by the hypothetical text; HyDE may add nothing or add noise (the trace shows `direct_only`, `hyde_only` and `overlap`); one model call and two embeddings; no routing or loop.
 - **Command:** `uv run python -m building_with_rag.retrieval "What happens to a person who knowingly buys a phone that a thief stole?" --mode hyde`.
+
+## Bounded agentic RAG
+
+Story 6.1 makes `agentic` the seventh and final real mode. It is deterministic application code, selected explicitly (`rag-agentic` / `pattern: "agentic"`); nothing routes to it and its internal path choice routes nothing from another mode. It is not an LLM planner. Code: `retrieval/agentic.py`.
+
+- **Closed allowlist.** `structuredLookup` (`structured_search`), `semanticRetrieve` (`semantic_search`), `hydeRetrieve` (`hyde_search`). Read-only; no other tool, no dynamic registration, no write. At most two calls and one HyDE call per request; no retry, loop, thread or fallback.
+- **Rules, in order.** (1) Validate before any call: a bare section number, a request with no letters, two acts or several sections, or an aggregation/listing intent is `clarify` (`validation_rejected`; fixed reason code, fixed message, the question is never echoed). (2) An act-qualified section request calls `structuredLookup` once; a missing or ambiguous record is `clarify`, never a guess or a semantic fallback. (3) Any other question that matches the prepared `LAY_TERMS` list (everyday words the statute does not use) calls `semanticRetrieve` once and, only if that is inadequate, `hydeRetrieve` once. (4) Otherwise `semanticRetrieve` once.
+- **Adequacy.** Semantic: at least one real in-scope passage with `score >= MIN_EVIDENCE_SCORE` (reused from Story 5.2, 0.74; a chosen guard, not correctness); only those passages are retained. HyDE: status `ok` and at least one real in-scope passage (its score is a fused rank score, so no similarity floor applies).
+- **Scope.** Every adapter gets a copy of the request (same `filters`, `caller_id`, `limit`, `chapter`, `required_acts`) with only `generate_answer` forced false. Filters are never widened; the public scope applies to every call. Each result is inspected (pattern, documented status, passages with ids and text, in scope, `public`); anything else is `tool_invalid`.
+- **Outcomes (HTTP 200).** `ok` (`ready_for_synthesis`; the only status that generates), `clarify`, `partial_result` (real passages came back but none usable: `results` empty, ids and scores only in the trace) and `unavailable` (adapter failure, invalid result, deadline or call budget). Unlike other modes, an adapter failure is not a 503: the controller's purpose is an inspectable trace and a 503 would discard it. A bad `AGENTIC_DEADLINE_SECONDS` (not above 0) is a 503.
+- **Deadline.** Monotonic clock from controller start, checked before each call and after each returns; a result returned after expiry is discarded (`deadline_expired`). A running call is not cancelled, so the true bound is the deadline plus one adapter's own timeout; it is not a hard cap.
+- **Trace (`trace[0]`).** `validation`, `path`, `mismatch_rule` (applied, match count), `calls` (adapter, outcome, status, counts, retained and weak ids/scores), `call_count`, `hyde_calls`, `adequacy`, `stop_reason` (`validation_rejected`, `ready_for_synthesis`, `record_not_found`, `no_usable_evidence`, `tool_invalid`, `tool_unavailable`, `deadline_expired`, `call_budget_exhausted`), `deadline_seconds`, `elapsed_ms`, `returned`, `ignored_fields`. No question text, `caller_id`, credentials, provider messages, passage text or HyDE hypothetical text; the hypothetical text is dropped when the adapter returns.
+- **Answer boundary.** The existing grounded path over the retained real passages and the original question; one controller run and at most one generation; chat and Open WebUI streaming unchanged. The Open WebUI Functions already offer `agentic` and were not changed.
+- **Limitations.** Deterministic and narrow, not an agent that plans; the mismatch rule is a hand-prepared word list and misses other phrasings; the semantic floor is a chosen guard; HyDE adequacy is weaker (no similarity floor) and HyDE can add nothing or noise; the deadline is cooperative; extra latency and Voyage rate-limit exposure; explicit selection only; no routing, retries, loops, memory, graph or evaluation; one demo caller, `public` only.
+- **Command:** `uv run python -m building_with_rag.retrieval "What happens to a person who knowingly buys a phone that a thief stole?" --mode agentic`.

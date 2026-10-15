@@ -8,6 +8,7 @@
   uv run python -m building_with_rag.retrieval "BNS section 103" --mode structured
   uv run python -m building_with_rag.retrieval "<compound question>" --mode decomposition
   uv run python -m building_with_rag.retrieval "<question>" --mode hyde
+  uv run python -m building_with_rag.retrieval "<question>" --mode agentic
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from ..ingestion.mongodb_schema import (
 )
 from ..ingestion.parser import ACTS, OUT_DIR
 from ..models import QueryRequest, SemanticFilters
+from .agentic import agentic_search
 from .decomposition import decomposition_search
 from .hybrid import hybrid_search
 from .hyde import hyde_search
@@ -109,7 +111,7 @@ def main() -> int:
     ap.add_argument("--act", action="append", default=[])
     ap.add_argument("--status", action="append", default=[])
     ap.add_argument("--inspect", action="store_true")
-    ap.add_argument("--mode", choices=("semantic", "hybrid", "hybrid-reranked", "structured", "decomposition", "hyde"),
+    ap.add_argument("--mode", choices=("semantic", "hybrid", "hybrid-reranked", "structured", "decomposition", "hyde", "agentic"),
                     default="semantic")
     a = ap.parse_args()
     try:
@@ -145,6 +147,17 @@ def main() -> int:
                 print(f"- {sub.status} reason={sub.reason} best_score={_f(step['best_score'])} "
                       f"sections={[r.section_id for r in sub.results]} q={sub.subquestion!r}")
             print(f"results={[r.section_id for r in res.results]}")
+            return 0
+        if a.mode == "agentic":
+            req.pattern = "agentic"
+            res = agentic_search(req, s)
+            t = res.trace[0]
+            print(f"mode={res.pattern} status={res.status} path={t['path']} "
+                  f"stop_reason={t['stop_reason']} calls={t['call_count']} hyde={t['hyde_calls']} "
+                  f"validation={t['validation']['outcome']}/{t['validation']['reason']}")
+            print("sequence:", [(c["adapter"], c["status"], c["outcome"]) for c in t["calls"]])
+            print("adequacy:", [(x["rule"], x["adequate"]) for x in t["adequacy"]])
+            print(f"retained={[r.section_id for r in res.results]}")
             return 0
         if a.mode == "hyde":
             req.pattern = "hyde"

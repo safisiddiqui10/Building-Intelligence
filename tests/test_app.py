@@ -27,6 +27,7 @@ MODELS = [
     "rag-structured",
     "rag-decomposition",
     "rag-hyde",
+    "rag-agentic",
 ]
 
 PIPE_REQUEST = {
@@ -53,7 +54,7 @@ def test_healthz():
 
 @pytest.fixture
 def no_real_modes(monkeypatch):
-    """All six modes are real since Story 5.2; patch the dispatch set to reach `placeholder`."""
+    """All seven modes are real since Story 6.1; patch the dispatch set to reach `placeholder`."""
     monkeypatch.setattr("building_with_rag.registry.MODES", ())
 
 

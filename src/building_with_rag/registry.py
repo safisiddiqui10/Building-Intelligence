@@ -1,4 +1,4 @@
-"""Single mode registry and dispatcher. All six modes are implemented."""
+"""Single mode registry and dispatcher. All seven modes are implemented."""
 
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -31,7 +31,7 @@ class PatternRun:
 def _generation_plan(request: QueryRequest, result: QueryResult) -> tuple[str, str | None] | None:
     """(question for the writer, leading notice) when the result is answerable, else None.
 
-    structured and hyde generate only for `ok` (hyde passes real passages and the original
+    structured, hyde and agentic generate only for `ok` (hyde passes real passages and the original
     question, never the hypothetical text). decomposition also generates for `partial_answer`, but
     only about the evidenced subquestions, with a notice naming the missing ones.
     """
@@ -58,7 +58,8 @@ def start_pattern(request: QueryRequest, settings: Settings | None = None) -> Pa
                   "hybrid-reranked": retrieval.rerank_search,
                   "structured": retrieval.structured_search,
                   "decomposition": retrieval.decomposition_search,
-                  "hyde": retrieval.hyde_search}[request.pattern]
+                  "hyde": retrieval.hyde_search,
+                  "agentic": retrieval.agentic_search}[request.pattern]
         result = search(request, settings)
         plan = _generation_plan(request, result)
         if request.generate_answer and plan is not None:

@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-Mode = Literal["semantic", "hybrid", "hybrid-reranked", "structured", "decomposition", "hyde"]
+Mode = Literal["semantic", "hybrid", "hybrid-reranked", "structured", "decomposition", "hyde", "agentic"]
 
 
 FilterValue = Annotated[str, Field(min_length=1, max_length=64)]

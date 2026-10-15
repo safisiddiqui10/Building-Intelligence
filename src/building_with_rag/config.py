@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     rerank_candidate_limit: int = 20
     rerank_send_limit: int = 10
     rerank_return_limit: int = 5
+    agentic_deadline_seconds: float = 45
 
     # Fixed course embedding choice (not configurable).
     embedding_model: str = "voyage-3.5"

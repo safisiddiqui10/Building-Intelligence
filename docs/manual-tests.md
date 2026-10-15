@@ -271,9 +271,45 @@ curl -N -X POST http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: appl
 ```
 Expected: 4 returns `200` with `generation.outcome: "answered"` and citations to real corpus sections. 5 returns `200` `text/event-stream`: role frame, `DRAFT` start, `Confidence` block with Sources, stop frame, `data: [DONE]` (a partial case starts with "Partial answer — no corpus evidence found for: ..."). A missing `GENERATION_*` or `VOYAGE_API_KEY` value is a `503` (chat: OpenAI error envelope before any stream).
 
-## Session 5 smoke check — all six modes
+## Story 6.1 — Bounded Agentic RAG
 
-Run one at a time (rate limits); each should keep its earlier contract. `/v1/models` must list exactly the six IDs.
+**What it adds:** the real `agentic` mode (`rag-agentic`): a fixed controller over `structuredLookup`, `semanticRetrieve` and `hydeRetrieve`, at most two calls, with an inspectable `trace[0]`.
+
+Prerequisite: API running with `MONGODB_URI`, `VOYAGE_API_KEY`, `GENERATION_API_BASE_URL` and `GENERATION_API_KEY`; `AGENTIC_DEADLINE_SECONDS` optional (default 45). Space requests out (Voyage rate limit).
+
+```bash
+# 1. Success: act-qualified lookup
+curl -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json"   -d '{"question": "BNS section 103", "pattern": "agentic"}'
+```
+Expected: `200`, `pattern: "agentic"`, `status: "ok"`, one `bns:103` result; `trace[0]` shows `path: "exact"`, `calls` with `structuredLookup` only, `call_count: 1`, `stop_reason: "ready_for_synthesis"`.
+
+```bash
+# 2. Ordinary question
+curl -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json"   -d '{"question": "What is the punishment for murder?", "pattern": "agentic"}'
+
+# 3. Vocabulary-mismatch question
+curl -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json"   -d '{"question": "What happens to a person who knowingly buys a phone that a thief stole?", "pattern": "agentic"}'
+```
+Expected: 2 returns `ok`, `semanticRetrieve` only, one adequacy row with `adequate: true`. 3 returns `trace[0].mismatch_rule.applied: true` with `semanticRetrieve` first; `hydeRetrieve` follows once (`call_count: 2`, `hyde_calls: 1`) only if the direct result was inadequate, otherwise the sequence ends after the first call. A Voyage rate limit during a call shows as `status: "unavailable"`, `stop_reason: "tool_unavailable"`. The hypothetical text appears nowhere in the response.
+
+```bash
+# 4. Edge case: ambiguous input (no tool call)
+curl -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json"   -d '{"question": "What does section 103 say?", "pattern": "agentic"}'
+```
+Expected: `200`, `status: "clarify"`, empty `results`, `trace[0].call_count: 0`, `validation.reason: "bare_section_number"`, `stop_reason: "validation_rejected"`, no question text in the trace, `generation: null`.
+
+```bash
+# 5. Grounded answer from the retained real passages
+curl -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json"   -d '{"question": "What is the punishment for murder?", "pattern": "agentic", "generate_answer": true}'
+
+# 6. Chat, streaming, selecting the agentic model
+curl -N -X POST http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json"   -d '{"model": "rag-agentic", "stream": true, "messages": [{"role": "user", "content": "What is the punishment for murder?"}], "rag_options": {"pattern": "agentic"}}'
+```
+Expected: 5 returns `200` with `generation.outcome: "answered"` and citations to real corpus sections. 6 returns `200` `text/event-stream`: role frame, `DRAFT` start, `Confidence` block with Sources, stop frame, `data: [DONE]`; for the `clarify` question in 4 the stream carries only the message text.
+
+## Final smoke check — all seven modes
+
+Run one at a time (rate limits); each should keep its earlier contract. `/v1/models` must list exactly the seven IDs (including `rag-agentic`). Add one agentic request (see Story 6.1) and `rag-agentic` to the chat loop.
 
 ```bash
 Q='{"question": "What is the punishment for murder?", "pattern": "%s"}'
@@ -285,4 +321,4 @@ curl -s -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/jso
 curl -s http://127.0.0.1:8000/v1/models
 for m in semantic hybrid hybrid-reranked structured decomposition hyde; do curl -s -N -X POST http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\": \"rag-$m\", \"stream\": true, \"messages\": [{\"role\": \"user\", \"content\": \"BNS section 103\"}]}" | tail -n 2; sleep 60; done
 ```
-Expected: `semantic` and `hybrid` `status: "ok"` with passages; `hybrid-reranked` re-ranked passages (or `503` "RERANK_API_KEY is not set." when that key is absent); `structured` `ok` for `bns:103`; `decomposition` and `hyde` as above; every chat stream ends with `data: [DONE]`. Then pick each of the six in Open WebUI once.
+Expected: `semantic` and `hybrid` `status: "ok"` with passages; `hybrid-reranked` re-ranked passages (or `503` "RERANK_API_KEY is not set." when that key is absent); `structured` `ok` for `bns:103`; `decomposition` and `hyde` as above; every chat stream ends with `data: [DONE]`. Then pick each of the seven in Open WebUI once.
