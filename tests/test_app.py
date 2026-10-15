@@ -51,7 +51,13 @@ def test_healthz():
     assert r.json() == {"status": "ok"}
 
 
-def test_query_placeholder():
+@pytest.fixture
+def no_real_modes(monkeypatch):
+    """All six modes are real since Story 5.2; patch the dispatch set to reach `placeholder`."""
+    monkeypatch.setattr("building_with_rag.registry.MODES", ())
+
+
+def test_query_placeholder(no_real_modes):
     r = client.post("/v1/query", json={"question": "What is murder?", "pattern": "decomposition"})
     assert r.status_code == 200
     body = r.json()
@@ -74,7 +80,7 @@ def test_models():
 PLACEHOLDER_REQUEST = {**PIPE_REQUEST, "model": "rag-decomposition"}
 
 
-def test_chat_non_stream():
+def test_chat_non_stream(no_real_modes):
     r = client.post("/v1/chat/completions", json={**PLACEHOLDER_REQUEST, "stream": False})
     assert r.status_code == 200
     body = r.json()
@@ -82,7 +88,7 @@ def test_chat_non_stream():
     assert "not implemented" in body["choices"][0]["message"]["content"]
 
 
-def test_chat_stream():
+def test_chat_stream(no_real_modes):
     r = client.post("/v1/chat/completions", json=PLACEHOLDER_REQUEST)
     assert r.status_code == 200
     frames = [f for f in r.text.split("\n\n") if f]

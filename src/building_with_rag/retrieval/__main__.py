@@ -6,6 +6,8 @@
   uv run python -m building_with_rag.retrieval "question" --mode hybrid
   uv run python -m building_with_rag.retrieval "question" --mode hybrid-reranked
   uv run python -m building_with_rag.retrieval "BNS section 103" --mode structured
+  uv run python -m building_with_rag.retrieval "<compound question>" --mode decomposition
+  uv run python -m building_with_rag.retrieval "<question>" --mode hyde
 """
 
 from __future__ import annotations
@@ -30,7 +32,9 @@ from ..ingestion.mongodb_schema import (
 )
 from ..ingestion.parser import ACTS, OUT_DIR
 from ..models import QueryRequest, SemanticFilters
+from .decomposition import decomposition_search
 from .hybrid import hybrid_search
+from .hyde import hyde_search
 from .rerank import rerank_search
 from .semantic import RetrievalUnavailable, get_db, index_status, semantic_search
 from .structured import structured_search
@@ -105,7 +109,8 @@ def main() -> int:
     ap.add_argument("--act", action="append", default=[])
     ap.add_argument("--status", action="append", default=[])
     ap.add_argument("--inspect", action="store_true")
-    ap.add_argument("--mode", choices=("semantic", "hybrid", "hybrid-reranked", "structured"), default="semantic")
+    ap.add_argument("--mode", choices=("semantic", "hybrid", "hybrid-reranked", "structured", "decomposition", "hyde"),
+                    default="semantic")
     a = ap.parse_args()
     try:
         if a.check:
@@ -127,6 +132,29 @@ def main() -> int:
             for r in res.results:
                 print(f"section_id={r.section_id} heading={r.heading!r} status={r.status} "
                       f"source_status_version={r.source_status_version!r} text_len={len(r.text)}")
+            return 0
+        if a.mode == "decomposition":
+            req.pattern = "decomposition"
+            res = decomposition_search(req, s)
+            t = res.trace[0]
+            d = t["decomposition"]
+            print(f"mode={res.pattern} status={res.status} split_accepted={d['accepted']} "
+                  f"rejection={d['rejection_reason']} outcome: {t['outcome_reason']}")
+            for sub in res.subquestions:
+                step = next(x for x in t["steps"] if x["subquestion"] == sub.subquestion)
+                print(f"- {sub.status} reason={sub.reason} best_score={_f(step['best_score'])} "
+                      f"sections={[r.section_id for r in sub.results]} q={sub.subquestion!r}")
+            print(f"results={[r.section_id for r in res.results]}")
+            return 0
+        if a.mode == "hyde":
+            req.pattern = "hyde"
+            res = hyde_search(req, s)
+            t = res.trace[0]
+            print(f"mode={res.pattern} status={res.status} hypothetical_chars="
+                  f"{t['hypothetical']['chars']} rejection={t['hypothetical']['rejection_reason']}")
+            print(f"direct={[r.section_id for r in res.hyde_direct_candidates]}")
+            print(f"hypothetical_query={[r.section_id for r in res.hyde_query_candidates]}")
+            print(f"final={[r.section_id for r in res.results]}")
             return 0
         if a.mode == "hybrid-reranked":
             req.pattern = "hybrid-reranked"

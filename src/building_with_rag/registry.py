@@ -1,4 +1,4 @@
-"""Single mode registry and dispatcher. `semantic`, `hybrid`, `hybrid-reranked` and `structured` are implemented so far."""
+"""Single mode registry and dispatcher. All six modes are implemented."""
 
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -28,22 +28,51 @@ class PatternRun:
     events: Iterator | None = None
 
 
+def _generation_plan(request: QueryRequest, result: QueryResult) -> tuple[str, str | None] | None:
+    """(question for the writer, leading notice) when the result is answerable, else None.
+
+    structured and hyde generate only for `ok` (hyde passes real passages and the original
+    question, never the hypothetical text). decomposition also generates for `partial_answer`, but
+    only about the evidenced subquestions, with a notice naming the missing ones.
+    """
+    if request.pattern in ("semantic", "hybrid", "hybrid-reranked"):
+        return request.question, None
+    if result.status == "ok":
+        return request.question, None
+    if request.pattern == "decomposition" and result.status == "partial_answer":
+        have = [s.subquestion for s in result.subquestions if s.status == "evidenced"]
+        lack = [s.subquestion for s in result.subquestions if s.status == "no_evidence"]
+        return " ".join(have), ("Partial answer — no corpus evidence found for: "
+                                + "; ".join(lack) + "\n\n")
+    return None
+
+
 def start_pattern(request: QueryRequest, settings: Settings | None = None) -> PatternRun:
     """Run the selected pattern once. Generation, if requested, is returned unstarted so the
     caller either drains it (`run_pattern`) or streams it (chat): one retrieval, one operation."""
-    if request.pattern in ("semantic", "hybrid", "hybrid-reranked", "structured"):
+    if request.pattern in MODES:
         from building_with_rag import retrieval  # lazy: no connections at startup
 
         settings = settings or get_settings()
         search = {"semantic": retrieval.semantic_search, "hybrid": retrieval.hybrid_search,
                   "hybrid-reranked": retrieval.rerank_search,
-                  "structured": retrieval.structured_search}[request.pattern]
+                  "structured": retrieval.structured_search,
+                  "decomposition": retrieval.decomposition_search,
+                  "hyde": retrieval.hyde_search}[request.pattern]
         result = search(request, settings)
-        # structured: only an exact `ok` section is evidence; other statuses never call the LLM.
-        if request.generate_answer and (request.pattern != "structured" or result.status == "ok"):
+        plan = _generation_plan(request, result)
+        if request.generate_answer and plan is not None:
             from building_with_rag.generation import generate_events
 
-            return PatternRun(result, generate_events(request.question, result.results, settings))
+            question, notice = plan
+            events = generate_events(question, result.results, settings)
+            if notice:
+                from itertools import chain
+
+                from building_with_rag.generation.events import Text
+
+                events = chain([Text(notice)], events)
+            return PatternRun(result, events)
         return PatternRun(result)
     return PatternRun(placeholder(request))
 

@@ -42,8 +42,8 @@ One registry, one `run_pattern` dispatcher. Model IDs are `rag-<mode>`.
 | `hybrid` | `rag-hybrid` (real since Story 4.1) |
 | `hybrid-reranked` | `rag-hybrid-reranked` (real since Story 4.2) |
 | `structured` | `rag-structured` (real since Story 5.1) |
-| `decomposition` | `rag-decomposition` |
-| `hyde` | `rag-hyde` |
+| `decomposition` | `rag-decomposition` (real since Story 5.2) |
+| `hyde` | `rag-hyde` (real since Story 5.2) |
 
 ## API surface
 
@@ -62,7 +62,7 @@ Loaded by Pydantic settings from environment / `.env`. The app starts with no cr
 
 `APP_ENV`, `MONGODB_URI`, `MONGODB_DB_NAME`, `MONGODB_TEST_DB_NAME`, `VOYAGE_API_KEY`, `CAPSTONE_API_KEY`, `WEBUI_DEMO_CALLER_ID`, `GENERATION_API_BASE_URL`, `GENERATION_API_KEY`, `GENERATION_MODEL_NAME`, `RERANK_API_BASE_URL`, `RERANK_API_KEY`, `RERANK_MODEL_NAME`, `RERANK_REQUEST_TIMEOUT_SECONDS`, `RERANK_CANDIDATE_LIMIT`, `RERANK_SEND_LIMIT`, `RERANK_RETURN_LIMIT`.
 
-The `RERANK_*` settings are used by `hybrid-reranked` since Story 4.2; names and defaults are unchanged (see Re-ranking). Story 5.1 (`structured`) added no variable; it uses `MONGODB_URI` and `MONGODB_DB_NAME`.
+The `RERANK_*` settings are used by `hybrid-reranked` since Story 4.2; names and defaults are unchanged (see Re-ranking). Story 5.1 (`structured`) added no variable; it uses `MONGODB_URI` and `MONGODB_DB_NAME`. Story 5.2 (`decomposition`, `hyde`) added no variable; both use the existing `GENERATION_*` settings for one model step and the Voyage embedding settings.
 
 ## Document ingestion
 
@@ -127,7 +127,7 @@ Story 3.1 adds a non-streaming grounded answer to `POST /v1/query` for `semantic
 
 Story 3.2 connects real generation to Open WebUI. Code: `src/building_with_rag/generation/{answer,checks,events,render}.py`, `registry.start_pattern`, `main.py`.
 
-- **One path.** `start_pattern` runs the selected pattern once (one retrieval) and, when `generate_answer` is true, returns one unstarted generation event iterator. `run_pattern` (`/v1/query`) drains it; chat renders it. Never two LLM calls for one request. `semantic`, `hybrid` (Story 4.1) and `hybrid-reranked` (Story 4.2) and `structured` (Story 5.1) are real; `decomposition` and `hyde` still return the placeholder, streamed as before. `structured` generates only for status `ok`; its other statuses stream the result message.
+- **One path.** `start_pattern` runs the selected pattern once (one retrieval) and, when `generate_answer` is true, returns one unstarted generation event iterator. `run_pattern` (`/v1/query`) drains it; chat renders it. Never two LLM calls for one request. `semantic`, `hybrid` (Story 4.1) and `hybrid-reranked` (Story 4.2) and `structured` (Story 5.1), `decomposition` and `hyde` (Story 5.2) are real; no mode is a placeholder any more (`registry.placeholder` remains as the fallback). `structured` and `hyde` generate only for status `ok`, `decomposition` for `ok` and `partial_answer`; other statuses stream the result message.
 - **Only answer writing streams.** Retrieval and context assembly are not streamed and run before the response starts, so a retrieval failure is an HTTP error (chat: OpenAI error envelope, 503), never a half-open stream. Generation outcomes are in the stream or in `QueryResult.generation` with HTTP 200.
 - **Answer contract.** The model writes plain text; every sentence ends with the supplied labels in brackets (`[E3]`). `INSUFFICIENT_EVIDENCE: <reason>` means no answer; it is not retried and never shown as draft text. The provider is called with the standard OpenAI body with `stream: true`.
 - **Bounded attempts.** `MAX_ATTEMPTS` = 2. After each attempt: a **citation** check (at least one sentence; each cites supplied labels only; unknown labels are recorded, never stripped) and a **support** check (lexical: numbers must appear in the cited passages and at least `SUPPORT_MIN_OVERLAP` = 0.6 of key words must overlap; it catches fabricated numbers and off-topic claims, not subtle misreadings). Each failed check is one `issues` entry (`attempt`, `check`, `detail`). A failed attempt with an attempt left is retried with the plain-language failures as feedback.
@@ -171,3 +171,25 @@ Story 5.1 makes `structured` the fourth real mode: a read-only exact lookup of o
 - **Answer boundary.** The section is evidence in `QueryResult.results`, visible with no LLM call when `generate_answer` is false. Only when `generate_answer` is true and the status is `ok` does the existing context, grounded-answer, citation and streaming path run (one retrieval, at most one generation); other statuses never call the LLM and chat streams the message. Stored status and `source_status_version` are source metadata, not a claim that a provision is currently applicable.
 - **Limitations.** Exact lookup only; a small fixed set of phrasings (others are `unsupported`); no routing, no natural-language search, no listing or counting; a section longer than the context character limit is dropped by the existing context rule.
 - **Diagnostic command:** `uv run python -m building_with_rag.retrieval "BNS section 103" --mode structured`.
+
+## Query decomposition
+
+Story 5.2 makes `decomposition` the fifth real mode, for a compound comparison question. Selected explicitly (`rag-decomposition` / `pattern: "decomposition"`); nothing routes to it. Code: `retrieval/decomposition.py`, `retrieval/model_step.py`.
+
+- **One bounded model step.** `model_step.complete_text`: one non-streaming call to `GENERATION_API_BASE_URL` + `/chat/completions` (existing `GENERATION_*` settings, `temperature` 0, 30 s, one attempt, no retry). Missing `GENERATION_*` settings or a provider failure is HTTP 503 before any retrieval (chat: error envelope before any stream), never a fallback. The question is passed as delimited data.
+- **Strict split.** The reply must be a JSON object `{"subquestions": [...]}` with one to three unique items of 10 to 200 characters that each share a key-word stem with the question. Anything else is status `clarify` with a reason code in `trace[0].decomposition.rejection_reason`: `empty`, `malformed`, `too_many` (never truncated), `invalid_length`, `duplicate`, `out_of_scope` (a weak lexical guard). No retrieval or generation follows.
+- **Every subquestion is required.** Each is searched with `semantic_search` (limit `min(request.limit, 3)`); a subquestion naming exactly one act is narrowed to it, and the narrowing can only intersect `request.filters`. A subquestion is `evidenced` only if a passage scores at least `MIN_EVIDENCE_SCORE` (0.74): a chosen guard from live inspection, not a correctness measure. Otherwise it is `no_evidence` (reason `no_passages`, `below_score_threshold` or `outside_filters`) with empty `results`; weak passages appear only as ids and scores in the trace.
+- **Result.** `QueryResult.subquestions` (`SubquestionEvidence`) per accepted subquestion; `results` is the deduplicated union of evidenced passages, ordered round-robin by subquestion so the context limit keeps each subquestion's best passage. Status `ok` (all evidenced), `partial_answer` (some) or `clarify` (split rejected or none evidenced). The reason is in `trace[0].outcome_reason` and each `subquestions[].reason`, because `message` is replaced when an answer is generated.
+- **Answer boundary.** The existing grounded path over `results`: `ok` uses the original question; `partial_answer` asks only the evidenced subquestions and the stream starts with "Partial answer — no corpus evidence found for: ..."; `clarify` never calls the LLM. Confidence reflects the existing checks on the written claims, not completeness of the comparison.
+- **Limitations.** Bounded by the model's split quality; the threshold is a single chosen value (an unrelated statute can still reach adjacent sections, so it is a weak guard); one model call and up to three embeddings (rate limited, slower than `semantic`); semantic search only; no routing, loops, graph or memory.
+- **Command:** `uv run python -m building_with_rag.retrieval "Compare the punishment for murder under the BNS and under the IPC." --mode decomposition`.
+
+## HyDE
+
+Story 5.2 makes `hyde` the sixth real mode, for questions phrased in words the statute does not use. Selected explicitly (`rag-hyde`); code `retrieval/hyde.py`.
+
+- **Flow.** Check `MONGODB_URI`, `VOYAGE_API_KEY` and `GENERATION_*` first (503 naming the variable) → one model call writes one hypothetical bare-act-style passage → accepted only if plain text of 40 to 1,200 characters (not JSON, a code fence or a refusal) → embed the question and the hypothetical text with the existing `voyage-3.5` query embedding → two `$vectorSearch` runs with the same server-built filter → reciprocal-rank fusion (`RRF_K` = 60, equal weights) → `results` (top `limit`).
+- **Hypothetical text is never evidence.** It only finds real passages. It appears only in `hyde_hypothetical_text_debug`; the trace holds its length. Real passages are in `hyde_direct_candidates`, `hyde_query_candidates` and the fused `results` (`score` = fused score; per-route rank and similarity in the trace). The writer receives only `results` and the original question.
+- **Statuses.** `ok`, `no_results`, `hyde_unavailable` (empty or malformed text: HTTP 200, no search, no answer, the message points to `rag-semantic`). Missing configuration, a provider failure, an embedding or MongoDB error is HTTP 503.
+- **Limitations.** Bounded by the hypothetical text; HyDE may add nothing or add noise (the trace shows `direct_only`, `hyde_only` and `overlap`); one model call and two embeddings; no routing or loop.
+- **Command:** `uv run python -m building_with_rag.retrieval "What happens to a person who knowingly buys a phone that a thief stole?" --mode hyde`.

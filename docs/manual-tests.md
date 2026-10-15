@@ -2,7 +2,7 @@
 
 ## Story 1.1 — Architecture and Project Seed
 
-**What it adds:** a FastAPI seed with `/healthz`, `/v1/query`, `/v1/models` and OpenAI-compatible `/v1/chat/completions`, where all six RAG modes return an honest `not_implemented` placeholder.
+**What it adds:** a FastAPI seed with `/healthz`, `/v1/query`, `/v1/models` and OpenAI-compatible `/v1/chat/completions`, where all six RAG modes returned an honest `not_implemented` placeholder. *Historical: every mode is real since Story 5.2, so the placeholder expectations below no longer hold; later sections are current.*
 
 Prerequisite: start the API with `uv run uvicorn building_with_rag.main:app --port 8000` (no credentials needed). Commands use Git Bash/POSIX quoting.
 
@@ -15,12 +15,7 @@ curl -X POST http://127.0.0.1:8000/v1/query \
   -H "Content-Type: application/json" \
   -d '{"question": "What is the punishment for murder?", "pattern": "semantic"}'
 
-# 3. Unimplemented modes return their placeholder
-for m in decomposition hyde; do
-  curl -s -X POST http://127.0.0.1:8000/v1/query \
-    -H "Content-Type: application/json" \
-    -d "{\"question\": \"test\", \"pattern\": \"$m\"}"; echo
-done
+# 3. (Historical: all six modes were placeholders here; none is since Story 5.2.)
 
 # 4. Failure: unknown caller
 curl -i -X POST http://127.0.0.1:8000/v1/query \
@@ -49,7 +44,7 @@ curl -i -X POST http://127.0.0.1:8000/v1/chat/completions \
 Expected:
 1. `200` with `{"status":"ok"}`.
 2. `200`, `pattern: "semantic"`, `status: "not_implemented"`, empty `results`, message "The 'semantic' pattern is not implemented yet."
-3. Two results (the modes still placeholders), one per mode, each echoing its own `pattern` with `status: "not_implemented"` and empty `results`.
+3. Historical: all six modes returned `not_implemented` here; since Story 5.2 none do.
 4. `403` with `{"detail":"Unknown caller."}`.
 5. Object `list` with exactly six ids: `rag-semantic`, `rag-hybrid`, `rag-hybrid-reranked`, `rag-structured`, `rag-decomposition`, `rag-hyde`.
 6. `200` `chat.completion` JSON; `choices[0].message.content` is the `semantic` not-implemented placeholder.
@@ -137,7 +132,7 @@ If `GENERATION_API_BASE_URL` or `GENERATION_API_KEY` is empty, or the provider t
 | 3 | Force a failure (temporary bad `GENERATION_MODEL_NAME` in the shell, restart, ask check 1) | Labelled `⚠ Answer generation unavailable` line (or `DRAFT — low confidence, not the final answer`); the chat ends. Equivalent: `unavailable`, or `malformed` + `low` + `draft_answer` + citations 0. |
 | 4 | Watch check 1 | Text appears incrementally; clean finish; no raw JSON or error toast. |
 | 5 | Auth (when `CAPSTONE_API_KEY` is set) | Matching Pipe valve works; wrong/missing shows `Capstone API error (HTTP 401)`. |
-| 6 | Choose `decomposition` | The "not implemented" placeholder. (`hybrid` is real since Story 4.1, `hybrid-reranked` since Story 4.2, `structured` since Story 5.1.) |
+| 6 | Choose `decomposition` | A real answer or message (Story 5.2). No mode is a placeholder any more. |
 
 ## Story 4.1 — Hybrid Search
 
@@ -242,3 +237,52 @@ Expected: `200`, `generation.outcome: "answered"` with citations to `bns:103`. W
 curl -N -X POST http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json"   -d '{"model": "rag-structured", "stream": true, "messages": [{"role": "user", "content": "BNS section 103"}], "rag_options": {"pattern": "structured"}}'
 ```
 Expected: `200` `text/event-stream` with a role frame, the streamed answer (DRAFT start, `Confidence` block, Sources) and a stop frame, ending with `data: [DONE]`. For a clarification, no-match or unsupported question the stream carries only the message text.
+
+## Story 5.2 — Query Decomposition and HyDE
+
+**What it adds:** the real `decomposition` mode (`rag-decomposition`: one model split into 1 to 3 required subquestions, each searched on its own) and the real `hyde` mode (`rag-hyde`: a hypothetical passage is embedded only to find real passages).
+
+Prerequisite: start the API (`uv run uvicorn building_with_rag.main:app --port 8000`) with `MONGODB_URI`, `VOYAGE_API_KEY`, `GENERATION_API_BASE_URL` and `GENERATION_API_KEY` set in `.env`. The free Voyage key is rate limited: wait about a minute between requests.
+
+```bash
+# 1. Success: decomposition, BNS-versus-IPC comparison
+curl -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json"   -d '{"question": "Compare the punishment for murder under the BNS and under the IPC.", "pattern": "decomposition"}'
+```
+Expected: `200`, `pattern: "decomposition"`, `status: "ok"`, two or three `subquestions` all `evidenced` (BNS passages such as `bns:103`, IPC passages such as `ipc:302`), every passage also in `results`; `trace[0]` shows the model reply, each step and `min_evidence_score`.
+
+```bash
+# 2. Edge case: one part the corpus cannot support
+curl -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json"   -d '{"question": "Compare the punishment for murder under the BNS with income tax evasion under the Income Tax Act.", "pattern": "decomposition", "generate_answer": true}'
+```
+Expected: `200`, `status: "partial_answer"` (or `clarify`); the unsupported subquestions are `no_evidence` with a `reason` (also in `trace[0].outcome_reason`); any `generation` covers only the evidenced part, never a complete comparison.
+
+```bash
+# 3. Success: hyde, vocabulary-mismatch question
+curl -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json"   -d '{"question": "What happens to a person who knowingly buys a phone that a thief stole?", "pattern": "hyde"}'
+```
+Expected: `200`, `pattern: "hyde"`, `status: "ok"`, `hyde_direct_candidates`, `hyde_query_candidates` and deduplicated real `results` (for example `ipc:411`, `bns:317`); the hypothetical text appears only in `hyde_hypothetical_text_debug`.
+
+```bash
+# 4. Grounded answer from real passages (hyde)
+curl -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json"   -d '{"question": "What happens to a person who knowingly buys a phone that a thief stole?", "pattern": "hyde", "generate_answer": true}'
+
+# 5. Chat, streaming, selecting the decomposition model (use "rag-hyde" for HyDE)
+curl -N -X POST http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json"   -d '{"model": "rag-decomposition", "stream": true, "messages": [{"role": "user", "content": "Compare the punishment for murder under the BNS and under the IPC."}], "rag_options": {"pattern": "decomposition"}}'
+```
+Expected: 4 returns `200` with `generation.outcome: "answered"` and citations to real corpus sections. 5 returns `200` `text/event-stream`: role frame, `DRAFT` start, `Confidence` block with Sources, stop frame, `data: [DONE]` (a partial case starts with "Partial answer — no corpus evidence found for: ..."). A missing `GENERATION_*` or `VOYAGE_API_KEY` value is a `503` (chat: OpenAI error envelope before any stream).
+
+## Session 5 smoke check — all six modes
+
+Run one at a time (rate limits); each should keep its earlier contract. `/v1/models` must list exactly the six IDs.
+
+```bash
+Q='{"question": "What is the punishment for murder?", "pattern": "%s"}'
+for m in semantic hybrid hybrid-reranked; do curl -s -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json" -d "$(printf "$Q" $m)" | head -c 300; echo; sleep 20; done
+curl -s -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json" -d '{"question": "BNS section 103", "pattern": "structured"}' | head -c 300; echo
+curl -s -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json" -d '{"question": "Compare the punishment for murder under the BNS and under the IPC.", "pattern": "decomposition"}' | head -c 300; echo
+sleep 60
+curl -s -X POST http://127.0.0.1:8000/v1/query -H "Content-Type: application/json" -d '{"question": "What happens to a person who knowingly buys a phone that a thief stole?", "pattern": "hyde"}' | head -c 300; echo
+curl -s http://127.0.0.1:8000/v1/models
+for m in semantic hybrid hybrid-reranked structured decomposition hyde; do curl -s -N -X POST http://127.0.0.1:8000/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\": \"rag-$m\", \"stream\": true, \"messages\": [{\"role\": \"user\", \"content\": \"BNS section 103\"}]}" | tail -n 2; sleep 60; done
+```
+Expected: `semantic` and `hybrid` `status: "ok"` with passages; `hybrid-reranked` re-ranked passages (or `503` "RERANK_API_KEY is not set." when that key is absent); `structured` `ok` for `bns:103`; `decomposition` and `hyde` as above; every chat stream ends with `data: [DONE]`. Then pick each of the six in Open WebUI once.
