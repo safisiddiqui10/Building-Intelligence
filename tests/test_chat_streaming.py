@@ -148,3 +148,12 @@ def test_capstone_key_auth(monkeypatch):
     assert client.post("/v1/query", json=query, headers=ok).status_code == 200
     assert client.post("/v1/chat/completions", json=chat, headers=ok).status_code == 200
     assert client.get("/healthz").status_code == 200 and client.get("/v1/models").status_code == 200
+
+
+def test_pipe_shaped_rag_options_are_accepted(searches):
+    """The Open WebUI Pipe nests filters and sends null for unset lists."""
+    opts = {"pattern": "semantic", "filters": {"act": ["BNS_2023"], "status": []}, "limit": 5,
+            "required_acts": None, "chapter": None}
+    r = client.post("/v1/chat/completions", json={**CHAT, "rag_options": opts})
+    assert r.status_code == 200
+    assert searches[-1].filters.act == ["BNS_2023"]

@@ -145,10 +145,11 @@ def chat_completions(
     fields: dict = {"question": question, "pattern": pattern}
     opts = body.rag_options
     if opts is not None:
-        if opts.act or opts.status or opts.access_level:
-            fields["filters"] = SemanticFilters(
-                act=opts.act, status=opts.status, access_level=opts.access_level
-            )
+        nested = opts.filters or SemanticFilters()
+        merged = {k: list(dict.fromkeys([*getattr(opts, k), *getattr(nested, k)]))
+                  for k in ("act", "status", "access_level")}
+        if any(merged.values()):
+            fields["filters"] = SemanticFilters(**merged)
         if opts.limit is not None:
             fields["limit"] = opts.limit
         fields["required_acts"] = opts.required_acts

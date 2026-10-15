@@ -131,9 +131,17 @@ class RagOptions(BaseModel):
     act: list[str] = Field(default_factory=list)
     status: list[str] = Field(default_factory=list)
     access_level: list[str] = Field(default_factory=list)
+    # The Open WebUI Pipe nests act/status here; merged with the flat lists in chat.
+    filters: SemanticFilters | None = None
     limit: int | None = Field(default=None, ge=1, le=20)
     required_acts: list[str] = Field(default_factory=list)
     chapter: str | None = None
+
+    @field_validator("act", "status", "access_level", "required_acts", mode="before")
+    @classmethod
+    def none_means_empty_list(cls, value: Any) -> Any:
+        # The Open WebUI Filter/Pipe emits ``null`` for an unset multi-select.
+        return [] if value is None else value
 
 
 class ChatCompletionRequest(BaseModel):
